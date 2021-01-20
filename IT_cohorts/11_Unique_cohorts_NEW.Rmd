@@ -15,8 +15,8 @@ Rizvi 2015 lung
 #Setup
 
 ```{r}
-setwd("d:/CloudStation/mygit/TCEM_related_vars/IT_cohorts/")
-ext_folder1 = "d:/CloudStation/mygit_EXT/TCEM_related_vars/IT_cohorts/"
+setwd("D:/CloudStation/mygit/TCEM_related_vars/IT_cohorts/")
+ext_folder1 = "D:/CloudStation/mygit_EXT/TCEM_related_vars/IT_cohorts/"
 packs <- c("pbapply", "readxl", "stringr", "magrittr", "survival", "testit", "ggplot2", "ggpubr", "survminer", "seqinr", "tidyr", "Rfast", "fastmatch", "org.Hs.eg.db")
 invisible(lapply(packs, require, character.only = TRUE))
 rm(packs)
@@ -615,7 +615,8 @@ save(pat_ratio, file = paste0(ext_folder1,"11out/",cohort_name, "/pat_ratio"))
 ids = list.files(paste0(ext_folder1, "11out/", cohort_name, "/tcem_mutated_nonamers/"))
 chowell_data = read_excel(paste0(ext_folder1, "objects/aao4572_Chowell_SM-Table-S9.xlsx"))
 clinical = chowell_data[chowell_data$Reference == "Snyder et al. 2014",c("Sample", "OS_Months", "OS_Event", "Cancer Type", "Drug Class", "MutCnt")]
-
+class(clinical$OS_Months) = "numeric"
+class(clinical$OS_Event) = "numeric"
 mutcnt = pbsapply(ids, function(x) {
   load(paste0(ext_folder1, "11out/", cohort_name, "/tcem_mutated_nonamers/", x))
   length(unique(nonamers$mut))
@@ -810,7 +811,7 @@ tcemvars = grep("_l|_h", colnames(cohort), value = T)
 res = expand.grid(cohort = c("all", unique(cohort$cohort)), tcemv = tcemvars, tcemv.cutpoint = seq(0.05,0.6,0.05), tcemv_filter = c("no", "yes"), stringsAsFactors = F)
 res_ftest = res
 res %<>%
-  mutate(m34n = NA, TMBcor_rho = NA, TMBcor_p = NA, m3coef = NA, m3p = NA, m3warning = NA,
+  mutate(m34n = NA, TMBcor_rho = NA, TMBcor_p = NA, TCEMvarcountcor_rho = NA, TCEMvarcountcor_p = NA, m3coef = NA, m3p = NA, m3warning = NA,
          m4lown = NA, m4highn = NA, m4coef = NA, m4p = NA, m4warning = NA)
 res_ftest %<>%
   mutate(m3p = NA, m3globalp = NA, m3warning = NA, m4p = NA, m4globalp = NA, m4warning = NA)
@@ -828,7 +829,7 @@ for(i in 1:nrow(res)) {
     cohort_f %<>% 
       dplyr::rename(countvar = tempcountvar, tcemvar = temptcemvar) %>% 
       dplyr::filter(!is.na(tcemvar)) %>% 
-      dplyr::select(sampleid, OS_Months, OS_Event, TMB, countvar, tcemvar)
+      dplyr::select(all_of(c("sampleid", "OS_Months", "OS_Event", "TMB", "countvar", "tcemvar")))
     if(res$tcemv_filter[i] == "yes") cohort_f %<>% dplyr::filter(countvar >= 10) #more than 10 neopeptide
     cohort_f$tcemvargroup = cut(x = cohort_f$tcemvar, breaks = c(0,res$tcemv.cutpoint[i],1), include.lowest = T, labels = F, right = F)
     cohort_f %<>% na.omit()
@@ -837,6 +838,8 @@ for(i in 1:nrow(res)) {
     if(nrow(subset(cohort_f, tcemvargroup == 1)) <= 3 | nrow(subset(cohort_f, tcemvargroup == 2)) <= 3) next()
     res$TMBcor_rho[i] = cor.test(cohort_f$TMB, cohort_f$tcemvar, method = "spearman")$estimate
     res$TMBcor_p[i] = cor.test(cohort_f$TMB, cohort_f$tcemvar, method = "spearman")$p.value
+    res$TCEMvarcountcor_rho[i] = cor.test(cohort_f$countvar, cohort_f$tcemvar, method = "spearman")$estimate
+    res$TCEMvarcountcor_p[i] = cor.test(cohort_f$countvar, cohort_f$tcemvar, method = "spearman")$p.value
     if(nrow(cohort_f) < 10) next()
     m3 = coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvar, data = cohort_f)
     res$m3coef[i] = as.matrix(coef(summary(m3)))["tcemvar","coef"]
@@ -863,7 +866,7 @@ rm(cohort_f, ftestm3, ftestm4, m3, m4, value_count_var_matching, i, tempcountvar
 
 colnames(res_ftest)[5:10] = paste("ftest", colnames(res_ftest)[5:10], sep = "_")
 res = cbind(res, res_ftest[,5:10])
-save(res, file = paste0(ext_folder1,"11out/survival_all"))
+save(res, file = paste0(ext_folder1,"11out/survival_cohorts_melanoma"))
 
 ```
 
