@@ -867,13 +867,19 @@ rm(cohort_f, ftestm3, ftestm4, m3, m4, value_count_var_matching, i, tempcountvar
 colnames(res_ftest)[5:10] = paste("ftest", colnames(res_ftest)[5:10], sep = "_")
 res = cbind(res, res_ftest[,5:10])
 save(res, file = paste0(ext_folder1,"11out/survival_cohorts_melanoma"))
-
+write.table(res, file = paste0(ext_folder1,"11out/survival_cohorts_melanoma.csv"), quote = F, sep = ";", dec = ".", row.names = F)
+res_filt = res %>% 
+  dplyr::filter(TMBcor_p>.05, m3p<.05, m4p<.05, m4lown>10, m4highn>10) %>% 
+  dplyr::select(c(1:5,10,11,13:16,18,19,21,22)) %>% 
+  dplyr::arrange(tcemv)
+res_filt[,c(6,7,10:15)] = apply(res_filt[,c(6,7,10:15)], 2, function(x) round(x,3)) 
+write.table(res_filt, file = paste0(ext_folder1,"11out/survival_cohorts_melanoma_signif.csv"), quote = F, sep = ";", dec = ".", row.names = F)
 ```
 
 #Results:
 
 ```{r}
-load(paste0(ext_folder1,"11out/survival_all"))
+load(paste0(ext_folder1,"11out/survival_cohorts_melanoma"))
 res %>% 
   dplyr::filter(tcemv_filter == "yes", m3p < 0.05, m4p < 0.05) %>% 
   View()
@@ -893,46 +899,43 @@ res %>%
   table() %>% 
   sort()
 
-#9639: melanoma	neoaffweak_THYMO_low 0.3 yes
-load(paste0(ext_folder1, "11out/cohort_all5"))
+#6887, 6888
+load(paste0(ext_folder1, "11out/cohorts_melanoma"))
 load(paste0(ext_folder1,"11out/value_count_var_matching"))
-i = 9639
+i = 6888
 temptcemvar = res$tcemv[i]
 tempcountvar = value_count_var_matching$countvar[value_count_var_matching$tcemvar == temptcemvar]
-cohort_f = cohort %>% 
-  dplyr::rename(countvar = tempcountvar, tcemvar = temptcemvar) %>% 
-  dplyr::filter(!is.na(tcemvar))
-summary(cohort_f$tcemvar)
+if(res$cohort[i] == "all") {
+  cohort_f = cohort
+} else {
+  cohort_f = subset(cohort, cohort == res$cohort[i])
+}
 cohort_f %<>% 
-  dplyr::select(sampleid, TMB, countvar, tcemvar, OS_Event, OS_Months)
+  dplyr::rename(countvar = tempcountvar, tcemvar = temptcemvar) %>% 
+  dplyr::filter(!is.na(tcemvar)) %>% 
+  dplyr::select(all_of(c("sampleid", "OS_Months", "OS_Event", "TMB", "countvar", "tcemvar")))
+summary(cohort_f$tcemvar)
 if(res$tcemv_filter[i] == "yes") cohort_f %<>% dplyr::filter(countvar >= 10) #legalabb 10 neopeptid legyen
 cohort_f$tcemvargroup = cut(x = cohort_f$tcemvar, breaks = c(0,res$tcemv.cutpoint[i],1), include.lowest = T, labels = F, right = F)
 cohort_f %<>% na.omit()
 nrow(cohort_f)
 cor.test(cohort_f$TMB, cohort_f$tcemvar, method = "spearman")
+cor.test(cohort_f$countvar, cohort_f$tcemvar, method = "spearman")
 ggplot(cohort_f, aes(TMB, tcemvar)) + geom_point() + geom_smooth() + stat_cor(method = "spearman")
 #ggsave(file = paste0(ext_folder1,"09out/plots/", paste0(as.character(res[i,1:4]), collapse = "_"), "cor.jpg"), width = 20, height = 20, units = "cm", dpi = "retina")
 
 coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvar, data = cohort_f)
 has_warning(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvar, data = cohort_f))
-coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvar, data = cohort_f)
-has_warning(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvar, data = cohort_f))
-
-cox.zph(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvar, data = cohort_f))
 cox.zph(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvar, data = cohort_f))
 
-coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f)
-has_warning(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f))
 coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f)
 has_warning(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f))
 table(cohort_f$tcemvargroup)
 cox.zph(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f))
 has_warning(cox.zph(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f)))
-cox.zph(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f))
-has_warning(cox.zph(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f)))
-
 
 survp = ggsurvplot(fit = survfit(Surv(time = OS_Months, event = OS_Event) ~ tcemvargroup, data = cohort_f), pval = TRUE, legend.title = res$tcemv[i], surv.median.line = c("hv"), title = paste(c("Dataset:", res[i,1:4]), sep = " ", collapse = " "), font.main = 8, risk.table = T)
+survp
 # pdf(paste0(ext_folder1,"09out/plots/", paste0(as.character(res[i,1:4]), collapse = "_"), "survival_plot.pdf"))
 # print(survp, newpage = FALSE)
 # dev.off()
@@ -944,8 +947,6 @@ ggforest(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f),
 #ggsave(file = paste0(ext_folder1,"09out/plots/",paste0(as.character(res[i,1:4]), collapse = "_"), "ggforest_cont.jpg"), width = 20, height = 20, units = "cm", dpi = "retina")
 
 rm(cohort_f, survp, i, tempcountvar, temptcemvar)
-
-
 ```
 
 
