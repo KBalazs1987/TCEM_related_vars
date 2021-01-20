@@ -1,0 +1,409 @@
+---
+title: "09_Cohorts_survival"
+author: "Balazs Koncz"
+date: '2020 12 04 '
+output: html_document
+---
+
+#Setup
+
+```{r}
+setwd("d:/CloudStation/mygit/TCEM_related_vars/IT_cohorts/")
+ext_folder1 = "d:/CloudStation/mygit_EXT/TCEM_related_vars/IT_cohorts/"
+packs <- c("magrittr", "tibble", "fastmatch", "ggplot2", "stringr", "forcats", "stringi", "Rfast", "tidyr", "parallel", "survival", "survminer", "testit", "beepr", "ComplexHeatmap", "circlize", "gridExtra", "pbapply", "readxl", "ggpubr", "Hmisc")
+invisible(lapply(packs, require, character.only = TRUE))
+rm(packs)
+```
+
+#Patients characteristics
+
+```{r}
+chowell_data = read_excel(paste0(ext_folder1, "objects/aao4572_Chowell_SM-Table-S9.xlsx"))
+ids = list.files(paste0(ext_folder1, "08out/tcem_mutated_nonamers/"))
+
+snyder = 
+
+mutcnt = pbsapply(ids, function(x) {
+  load(paste0(ext_folder1, "08out/tcem_mutated_nonamers/", x))
+  length(unique(nonamers$mut))
+})
+
+load(paste0(ext_folder1, "objects/c1c2"))
+c1c2 = c1c2[,c("Sample", "OS_Months", "OS_Event", "Drug.Class", "Cancer.Type")]
+colnames(c1c2)[1] = "sampleid"
+
+vallen = read_excel(paste0(ext_folder1, "objects/TableS2_Revised.xlsx"))
+vallen = vallen[,c("patient", "age_start", "overall_survival", "dead")]
+colnames(vallen)[c(1,4)] = c("sampleid","OS_Event")
+vallen$OS_Months = vallen$overall_survival/30.417
+vallen$Drug.Class = "CTLA-4"
+vallen$Cancer.Type = "Melanoma"
+# vallen$Age.Group = NA
+# vallen$Age.Group[vallen$age_start < 30] = "<30"
+# vallen$Age.Group[vallen$age_start > 30 & vallen$age_start <= 50] = "31-50"
+# vallen$Age.Group[vallen$age_start > 50 & vallen$age_start <= 60] = "50-60"
+# vallen$Age.Group[vallen$age_start > 60 & vallen$age_start <= 70] = "61-70"
+# vallen$Age.Group[vallen$age_start > 70] = ">71"
+# vallen$Age.Group = factor(vallen$Age.Group, levels = c("<30","31-50","50-60","61-70",">71"))
+
+vallen = vallen[,c("sampleid", "OS_Months", "OS_Event", "Drug.Class", "Cancer.Type")]
+
+
+c1c2 = c1c2[!c1c2$sampleid %in% vallen$sampleid,]
+vallen = vallen[vallen$sampleid %in% ids,]
+c1c2 = c1c2[c1c2$sampleid %in% ids,]
+#unique(dtann$sampleid[!dtann$sampleid %in% c1c2$Sample])
+pat_char = rbind(c1c2, vallen)
+pat_char = cbind(pat_char, TMB = mutcnt[match(pat_char$sampleid, names(mutcnt))])
+
+save(pat_char, file = paste0(ext_folder1, "09out/pat_char"))
+```
+
+#Analysis 1
+TP score is very good predictor!
+
+##Calculate ratios
+Ratio of neononamers with low TCEM frequency (<4), low TCEM expression and low TCEM thymoproteasomal score
+cutoff: 33% - 0.203075, 66% - 1.095007
+cutoff: 25%: 0.914470
+
+```{r}
+load(paste0(ext_folder1, "objects/pentamerfreq_tcem"))
+load(paste0(ext_folder1, "objects/exprmeds"))
+load(paste0(ext_folder1, "objects/thymomeds"))
+# load("D:/CloudStation/pentamer_project/objects/score_list_ipr_normalized_with_division_median_two_sides")
+# immunomeds = pbsapply(score_list, function(x) median(x))
+# rm(score_list)
+# save(immunomeds, file = paste0(ext_folder1, "objects/immunomeds"))
+load(paste0(ext_folder1, "objects/immunomeds"))
+cutp_expr1 = 0.203075
+cutp_expr2 = 1.095007
+cutp_th = 0.914470
+cutp_im1 = median(immunomeds, na.rm = T)
+cutp_im2 = unname(quantile(immunomeds,.75,na.rm = T))
+cutp_im3 = unname(quantile(immunomeds,.9,na.rm = T))
+
+ids = list.files(paste0(ext_folder1, "08out/tcem_mutated_nonamers/"))
+vals = c("neoaffweak", "neoaffstr", "neorpweak", "neorpstr")
+
+
+sort(pbsapply(ids, function(x) {
+  load(paste0(ext_folder1, "08out/tcem_mutated_nonamers/", x))
+  nrow(nonamers)
+}))
+
+i=0
+pat_ratio = t(pbsapply(ids, function(x) {
+  i = i+1
+  .GlobalEnv$i = i
+  
+  load(paste0(ext_folder1, "08out/tcem_mutated_nonamers/", x))
+  
+  ratios = lapply(vals, function(y) {
+    tdf = nonamers %>% dplyr::rename(binding = y) %>% dplyr::filter(binding == TRUE)
+    #FREQ
+    nf = nrow(tdf)
+    lf = sum(tdf$neofreq<4)/nf
+    lorhf = sum(tdf$neofreq<4 | tdf$neofreq>=8) / nf
+    #EXPR
+    tdf_expr = subset(tdf, !is.na(neoexpr))
+    ne = nrow(tdf_expr)
+    le = sum(tdf_expr$neoexpr<cutp_expr1) / ne
+    lorhe = sum(tdf_expr$neoexpr<cutp_expr1 | tdf_expr$neoexpr>cutp_expr2) / ne
+    #THYMO
+    tdf_thymo = subset(tdf, !is.na(neothymo))
+    nt = nrow(tdf_thymo)
+    lt = sum(tdf_thymo$neothymo<cutp_th) / nt
+    
+    #combinations - 2
+    ##FREQ & EXPR
+    lfle = sum(tdf_expr$neofreq<4 & tdf_expr$neoexpr<cutp_expr1) / ne
+    lorhfle = sum((tdf_expr$neofreq<4 | tdf_expr$neofreq>=8) & tdf_expr$neoexpr<cutp_expr1) / ne
+    lflorhe = sum(tdf_expr$neofreq<4 & (tdf_expr$neoexpr<cutp_expr1|tdf_expr$neoexpr>=cutp_expr2)) / ne
+    lorhflorhe = sum((tdf_expr$neofreq<4 | tdf_expr$neofreq>=8) & (tdf_expr$neoexpr<cutp_expr1|tdf_expr$neoexpr>=cutp_expr2)) / ne
+    ##FREQ & THYMO
+    lflt = sum(tdf_thymo$neofreq<4 & tdf_thymo$neothymo<cutp_th) / nt
+    lorhflt = sum((tdf_thymo$neofreq<4 | tdf_thymo$neofreq>=8) & tdf_thymo$neothymo<cutp_th) / nt
+    ##EXPR & THYMO
+    tdf_et = subset(tdf, !is.na(neoexpr) & !is.na(neothymo))
+    net = nrow(tdf_et)
+    lelt = sum(tdf_et$neoexpr<cutp_expr1 & tdf_et$neothymo<cutp_th) / net
+    lorhelt = sum((tdf_et$neoexpr<cutp_expr1|tdf_et$neoexpr>=cutp_expr2) & tdf_et$neothymo<cutp_th) / net
+    
+    #combination - 3
+    lflelt = sum(tdf_et$neofreq<4 & tdf_et$neoexpr<cutp_expr1 & tdf_et$neothymo<cutp_th) / net
+    lorhflelt = sum((tdf_et$neofreq<4 | tdf_et$neofreq>=8) & tdf_et$neoexpr<cutp_expr1 & tdf_et$neothymo<cutp_th) / net
+    lflorhelt = sum(tdf_et$neofreq<4 & (tdf_et$neoexpr<cutp_expr1 | tdf_et$neoexpr>=cutp_expr2) & tdf_et$neothymo<cutp_th) / net
+    lorhflorhelt = sum((tdf_et$neofreq<4 | tdf_et$neofreq>=8) & (tdf_et$neoexpr<cutp_expr1 | tdf_et$neoexpr>=cutp_expr2) & tdf_et$neothymo<cutp_th) / net
+    
+    #immuno - higher than cutoffs
+    tdf_immuno = subset(tdf, !is.na(neoimmuno))
+    ni = nrow(tdf_immuno)
+    hi1 = sum(tdf_immuno$neoimmuno>cutp_im1) / ni
+    hi2 = sum(tdf_immuno$neoimmuno>cutp_im2) / ni
+    hi3 = sum(tdf_immuno$neoimmuno>cutp_im3) / ni
+    ratios = c(nf, ne, nt, net, ni, lf, lorhf, le, lorhe, lt, lfle, lorhfle, lflorhe, lorhflorhe, lflt, lorhflt, lelt, lorhelt, lflelt, lorhflelt, lflorhelt, lorhflorhelt, hi1, hi2, hi3) #vars*
+    ratios
+  })
+  ratios = do.call(rbind, ratios)
+  colnames(ratios) = c("nFREQ", "nEXPR", "nTHYMO", "nEXPR_THYMO", "nIMMUNO", "FREQ_low", "FREQ_loh", "EXPR_low", "EXPR_loh", "THYMO_low", "FREQ_low_EXPR_low", "FREQ_loh_EXPR_low", "FREQ_low_EXPR_loh", "FREQ_loh_EXPR_loh", "FREQ_low_THYMO_low", "FREQ_loh_THYMO_low", "EXPR_low_THYMO_low", "EXPR_loh_THYMO_low", "FREQ_low_EXPR_low_THYMO_low", "FREQ_loh_EXPR_low_THYMO_low", "FREQ_low_EXPR_loh_THYMO_low", "FREQ_loh_EXPR_loh_THYMO_low", "hi1", "hi2", "hi3")
+  ratios = as.data.frame(ratios)
+  ratios = cbind(binding = vals, ratios)
+  ratios = pivot_wider(data = ratios, names_from = binding, values_from = 2:26, names_glue = "{binding}_{.value}")
+  cn = colnames(ratios)
+  ratios = as.numeric(ratios)
+  names(ratios) = cn
+  ratios
+}))
+
+pat_ratio = as.data.frame(pat_ratio)
+save(pat_ratio, file = paste0(ext_folder1,"09out/pat_ratio"))
+
+load(paste0(ext_folder1, "09out/pat_char"))
+cohort = cbind(pat_char, pat_ratio[match(pat_char$sampleid, rownames(pat_ratio)),])
+save(cohort, file = paste0(ext_folder1, "09out/cohort"))
+```
+
+##Survival
+
+```{r}
+load(paste0(ext_folder1,"09out/cohort"))
+tcemvars = grep("_l|_h", colnames(cohort), value = T)
+res = expand.grid(tumor = c("all", unique(cohort$Cancer.Type)), tcemv = tcemvars, tcemv.cutpoint = seq(0.05,0.6,0.05), tcemv_filter = c("no", "yes"), stringsAsFactors = F)
+res_ftest = res
+res %<>%
+  mutate(m34n = NA, TMBcor_rho = NA, TMBcor_p = NA, m3coef = NA, m3p = NA, m3warning = NA,
+         m4lown = NA, m4highn = NA, m4coef = NA, m4p = NA, m4warning = NA)
+res_ftest %<>%
+  mutate(m3p = NA, m3globalp = NA, m3warning = NA, m4p = NA, m4globalp = NA, m4warning = NA)
+
+
+for(i in 1:nrow(res)) {
+  tryCatch({  
+    print(i)
+    temptcemvar = res$tcemv[i]
+    tempcountvar = value_count_var_matching$countvar[value_count_var_matching$tcemvar == temptcemvar]
+    cohort_f = cohort %>% 
+      dplyr::rename(countvar = tempcountvar, tcemvar = temptcemvar) %>% 
+      dplyr::filter(!is.na(tcemvar))
+    #Select tumor
+    if(res$tumor[i] != "all") cohort_f %<>% dplyr::filter(Cancer.Type == res$tumor[i])
+    if(nrow(cohort_f) < 20) next()
+    #select tcemvars
+    cohort_f %<>% 
+      dplyr::select(sampleid, Age.Group, , countvar, tcemvar, OS_Event, OS_Months)
+    #filter neopep count connected to tcemvar
+    if(res$tcemv_filter[i] == "yes") cohort_f %<>% dplyr::filter(countvar >= 10) #legalabb 10 neopeptid legyen
+    if(nrow(cohort_f) < 20) next()
+    #Create TCEM freq group
+    cohort_f$tcemvargroup = cut(x = cohort_f$tcemvar, breaks = c(0,res$tcemv.cutpoint[i],1), include.lowest = T, labels = F, right = F)
+    cohort_f %<>% na.omit()
+    if(nrow(subset(cohort_f, OS_Event == 1)) <= 3) next()
+    res$m34n[i] = nrow(cohort_f)
+    res$TMBcor_rho[i] = cor.test(cohort_f$TMB, cohort_f$tcemvar, method = "spearman")$estimate
+    res$TMBcor_p[i] = cor.test(cohort_f$TMB, cohort_f$tcemvar, method = "spearman")$p.value
+    if(nrow(cohort_f) < 20) next()
+    m3 = coxph(Surv(OS_Months, OS_Event) ~ Age.Group + TMB + tcemvar, data = cohort_f)
+    res$m3coef[i] = as.matrix(coef(summary(m3)))["tcemvar","coef"]
+    res$m3p[i] = as.matrix(coef(summary(m3)))["tcemvar","Pr(>|z|)"]
+    res$m3warning[i] = has_warning(coxph(Surv(OS_Months, OS_Event) ~ Age.Group + TMB + tcemvar, data = cohort_f))
+    ftestm3 = cox.zph(m3)
+    res_ftest$m3p[i] = ftestm3$table["tcemvar","p"]
+    res_ftest$m3globalp[i] = ftestm3$table["GLOBAL","p"]
+    res_ftest$m3warning[i] = has_warning(cox.zph(coxph(Surv(OS_Months, OS_Event) ~ Age.Group + TMB + tcemvar, data = cohort_f)))
+    res$m4lown[i] = table(cohort_f$tcemvargroup)["1"]
+    res$m4highn[i] = table(cohort_f$tcemvargroup)["2"]
+    if(length(unique(cohort_f$tcemvargroup)) < 2) next()
+    m4 = coxph(Surv(OS_Months, OS_Event) ~ Age.Group + TMB + tcemvargroup, data = cohort_f)
+    res$m4coef[i] = as.matrix(coef(summary(m4)))["tcemvargroup","coef"]
+    res$m4p[i] = as.matrix(coef(summary(m4)))["tcemvargroup","Pr(>|z|)"]
+    res$m4warning[i] = has_warning(coxph(Surv(OS_Months, OS_Event) ~ Age.Group + TMB + tcemvargroup, data = cohort_f))
+    ftestm4 = cox.zph(m4)
+    res_ftest$m4p[i] = ftestm4$table["tcemvargroup","p"]
+    res_ftest$m4globalp[i] = ftestm4$table["GLOBAL","p"]
+    res_ftest$m4warning[i] = has_warning(cox.zph(coxph(Surv(OS_Months, OS_Event) ~ Age.Group + TMB + tcemvargroup, data = cohort_f)))
+  }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+}
+
+rm(cohort_f, ftestm3, ftestm4, m3, m4, i, tempcountvar, temptcemvar)
+
+colnames(res_ftest)[5:10] = paste("ftest", colnames(res_ftest)[5:10], sep = "_")
+res = cbind(res, res_ftest[,5:10])
+rm(res_ftest)
+save(res, file = paste0(ext_folder1,"09out/survival"))
+beep(sound = "ping")
+
+
+```
+
+##Results:
+
+```{r}
+load(paste0(ext_folder1,"09out/survival"))
+res %>% 
+  dplyr::filter(tcemv_filter == "yes", m3p < 0.05, m4p < 0.05) %>% 
+  View()
+res %>% 
+  dplyr::filter(tcemv_filter == "yes", m3p < 0.05, m4p < 0.05, m4lown >= 20, m4highn >= 20) %>% 
+  View()
+
+res %>% 
+  dplyr::filter(tcemv_filter == "yes", m3p < 0.05, m4p < 0.05) %>% 
+  dplyr::select(tcemv) %>% 
+  table() %>% 
+  sort()
+
+res %>% 
+  dplyr::filter(tcemv_filter == "yes", m3p < 0.05, m4p < 0.05, m4lown >= 20, m4highn >= 20) %>% 
+  dplyr::select(tcemv) %>% 
+  table() %>% 
+  sort()
+
+
+
+```
+
+##EXPR_loh_THYMO_low
+EXPR,THYMO:
+neoaffstr_EXPR_loh_THYMO_low ALL:3508,SKCM:3509
+neoaffweak_EXPR_loh_THYMO_low ALL:3745 (ns), SKCM:3746
+neorpstr_EXPR_loh_THYMO_low ALL:3754 (ns), SKCM:3755
+neorpweak_EXPR_loh_THYMO_low ALL:3511 (ns), SKCM:3512 - leggyengebb
+
+```{r}
+res %>% 
+  dplyr::filter(tcemv %in% c("neoaffstr_EXPR_loh_THYMO_low","neoaffweak_EXPR_loh_THYMO_low","neorpstr_EXPR_loh_THYMO_low","neorpweak_EXPR_loh_THYMO_low"), m4lown >= 10, m4highn >= 10) %>% 
+  View()
+
+View(res[c(3508,3509,3745,3746,3754,3755,3511,3512),])
+```
+
+##THYMO_low:
+neoaffstr_THYMO_low ALL:4132, SKCM:4133 (ns)
+neoaffweak_THYMO_low ALL:4129,SKCM:4130
+neorpstr_THYMO_low ALL:4138 (ns), SKCM:4139 (ns)
+neorpweak_THYMO_low ALL:4135 (ns),SKCM:4136 (ns)
+
+```{r}
+res %>% 
+  dplyr::filter(tcemv %in% c("neoaffstr_THYMO_low","neoaffweak_THYMO_low","neorpstr_THYMO_low","neorpweak_THYMO_low"), m4lown >= 10, m4highn >= 10) %>% 
+  View()
+View(res[c(4132,4133,4129,4130,4138,4139,4135,4136),])
+```
+
+##FREQ_low_THYMO_low
+neoaffstr_FREQ_low_THYMO_low ALL:3232,SKCM:3233
+neoaffweak_FREQ_low_THYMO_low - ns
+neorpstr_FREQ_low_THYMO_low - ns
+neorpweak_FREQ_low_THYMO_low - ns
+
+##FREQ_loh_THYMO_low
+neoaffstr_FREQ_loh_THYMO_low ALL: 3964 SKCM: 3965
+neoaffweak_FREQ_loh_THYMO_low ALL:3961 SKCM:3962
+neorpstr_FREQ_loh_THYMO_low ns
+neorpweak_FREQ_loh_THYMO_low ns
+
+##FREQ_loh_EXPR_loh_THYMO_low
+neoaffstr_FREQ_loh_EXPR_loh_THYMO_low ALL:3556, SKCM:3557 - kiegyenlitetlen
+neoaffweak_FREQ_loh_EXPR_loh_THYMO_low ALL:3553, SKCM:3554 - kiegyenlitetlen
+neorpstr_FREQ_loh_EXPR_loh_THYMO_low ALL:3562(ns), SKCM:3563 - kiegyenlitetlen
+neorpweak_FREQ_loh_EXPR_loh_THYMO_low ns
+
+
+##Plot
+
+```{r}
+load(paste0(ext_folder1,"09out/survival"))
+load(paste0(ext_folder1,"09out/cohort"))
+load(paste0(ext_folder1,"09out/value_count_var_matching"))
+
+i = 4136
+temptcemvar = res$tcemv[i]
+tempcountvar = value_count_var_matching$countvar[value_count_var_matching$tcemvar == temptcemvar]
+cohort_f = cohort %>% 
+  dplyr::rename(countvar = tempcountvar, tcemvar = temptcemvar) %>% 
+  dplyr::filter(!is.na(tcemvar))
+if(res$tumor[i] != "all") cohort_f %<>% dplyr::filter(Cancer.Type == res$tumor[i])
+cohort_f %<>% 
+  dplyr::select(sampleid, Age.Group, TMB, countvar, tcemvar, OS_Event, OS_Months)
+if(res$tcemv_filter[i] == "yes") cohort_f %<>% dplyr::filter(countvar >= 10) #legalabb 10 neopeptid legyen
+cohort_f$tcemvargroup = cut(x = cohort_f$tcemvar, breaks = c(0,res$tcemv.cutpoint[i],1), include.lowest = T, labels = F, right = F)
+cohort_f %<>% na.omit()
+nrow(cohort_f)
+cor.test(cohort_f$TMB, cohort_f$tcemvar, method = "spearman")
+ggplot(cohort_f, aes(TMB, tcemvar)) + geom_point() + geom_smooth() + stat_cor(method = "spearman")
+ggsave(file = paste0(ext_folder1,"09out/plots/", paste0(as.character(res[i,1:4]), collapse = "_"), "cor.jpg"), width = 20, height = 20, units = "cm", dpi = "retina")
+
+coxph(Surv(OS_Months, OS_Event) ~ Age.Group + TMB + tcemvar, data = cohort_f)
+has_warning(coxph(Surv(OS_Months, OS_Event) ~ Age.Group + TMB + tcemvar, data = cohort_f))
+cox.zph(coxph(Surv(OS_Months, OS_Event) ~ Age.Group + TMB + tcemvar, data = cohort_f))
+coxph(Surv(OS_Months, OS_Event) ~ Age.Group + TMB + tcemvargroup, data = cohort_f)
+table(cohort_f$tcemvargroup)
+has_warning(coxph(Surv(OS_Months, OS_Event) ~ Age.Group + TMB + tcemvargroup, data = cohort_f))
+cox.zph(coxph(Surv(OS_Months, OS_Event) ~ Age.Group + TMB + tcemvargroup, data = cohort_f))
+has_warning(cox.zph(coxph(Surv(OS_Months, OS_Event) ~ Age.Group + TMB + tcemvargroup, data = cohort_f)))
+
+survp = ggsurvplot(fit = survfit(Surv(time = OS_Months, event = OS_Event) ~ tcemvargroup, data = cohort_f), pval = TRUE, legend.title = res$tcemv[i], surv.median.line = c("hv"), title = paste(c("Dataset:", res[i,1:4]), sep = " ", collapse = " "), font.main = 8, risk.table = T)
+pdf(paste0(ext_folder1,"09out/plots/", paste0(as.character(res[i,1:4]), collapse = "_"), "survival_plot.pdf"))
+print(survp, newpage = FALSE)
+dev.off()
+
+
+ggforest(coxph(Surv(OS_Months, OS_Event) ~ Age.Group + TMB + tcemvar, data = cohort_f), data = cohort_f)
+ggsave(file = paste0(ext_folder1,"09out/plots/", paste0(as.character(res[i,1:4]), collapse = "_"), "ggforest.jpg"), width = 20, height = 20, units = "cm", dpi = "retina")
+ggforest(coxph(Surv(OS_Months, OS_Event) ~ Age.Group + TMB + tcemvargroup, data = cohort_f), data = cohort_f)
+ggsave(file = paste0(ext_folder1,"09out/plots/",paste0(as.character(res[i,1:4]), collapse = "_"), "ggforest_cont.jpg"), width = 20, height = 20, units = "cm", dpi = "retina")
+
+rm(cohort_f, survp, i, tempcountvar, temptcemvar)
+```
+
+##Correlation with mutation
+
+```{r}
+load(paste0(ext_folder1,"09out/survival"))
+load(paste0(ext_folder1,"09out/cohort"))
+
+tcemvars = grep("_l|_h", colnames(cohort), value = T)
+
+cormat <- cbind(rho = sapply(tcemvars, function(x) cor.test(cohort$TMB, cohort[,x], method = "spearman")$estimate), p.value = sapply(tcemvars, function(x) cor.test(cohort$TMB, cohort[,x], method = "spearman")$p.value))
+cormat = as.data.frame(cormat)
+cormat = cbind.data.frame(tcemvars, cormat)
+rownames(cormat) = NULL
+save(cormat, file = paste0(ext_folder1,"09out/correlation"))
+
+cohort_f = subset(cohort, affweak_lt > 0)
+Hmisc::rcorr(x = cohort_f$TMB, y = cohort_f$affweak_lt, type = "spearman")
+ggplot(cohort, aes(TMB, affweak_lt)) + geom_point() + scale_x_continuous(trans = "log2") + geom_smooth() + stat_cor(method = "spearman")
+ggplot(cohort, aes(TMB, affweak_lt)) + geom_point() + geom_smooth() + stat_cor(method = "spearman")
+```
+
+
+
+##Low mutation count and high ratio of epitopes with low thymoproteasome score
+
+```{r}
+load(paste0(ext_folder1,"09out/survival"))
+load(paste0(ext_folder1,"09out/cohort"))
+
+cohort_f = cohort %>% 
+  dplyr::filter(!is.na(affweak_lt)) %>% 
+  dplyr::filter(affweak_nt >= 10) %>% 
+  dplyr::select(sampleid, TMB, affweak_lt, OS_Months, OS_Event) 
+
+cohort_f$TMB_group = cut(x = cohort_f$TMB, breaks = c(0,median(cohort_f$TMB),Inf), include.lowest = T, labels = F, right = F)
+table(cohort_f$TMB_group)
+
+cohort_f$affweak_lt_group = cut(x = cohort_f$affweak_lt, breaks = c(0,.3,1), include.lowest = T, labels = F, right = T)
+table(cohort_f$affweak_lt_group)
+
+cohort_f$group = NA
+cohort_f$group[cohort_f$TMB < median(cohort_f$TMB) & cohort_f$affweak_lt > .3] = 1
+cohort_f$group[cohort_f$TMB > median(cohort_f$TMB) & cohort_f$affweak_lt < .3] = 2 #ennek varjuk a jobb tuleleset
+table(cohort_f$group)
+
+ggsurvplot(fit = survfit(Surv(time = OS_Months, event = OS_Event) ~ TMB_group, data = cohort_f), pval = TRUE, surv.median.line = c("hv"), font.main = 8, risk.table = T)
+ggsurvplot(fit = survfit(Surv(time = OS_Months, event = OS_Event) ~ affweak_lt_group, data = cohort_f), pval = TRUE, surv.median.line = c("hv"), font.main = 8, risk.table = T)
+ggsurvplot(fit = survfit(Surv(time = OS_Months, event = OS_Event) ~ group, data = cohort_f), pval = TRUE, surv.median.line = c("hv"), font.main = 8, risk.table = T)
+
+```
+

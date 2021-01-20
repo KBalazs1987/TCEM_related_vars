@@ -1,0 +1,1059 @@
+---
+title: "11_Unique_cohorts"
+author: "Balazs Koncz"
+date: '2020 12 11 '
+output: html_document
+---
+
+Snyder 2014 melanoma
+Van Allen 2015 melanoma
+Hugo 2016 melanoma
+Riaz 2017 melanoma
+
+Rizvi 2015 lung
+
+#Setup
+
+```{r}
+setwd("d:/CloudStation/mygit/TCEM_related_vars/IT_cohorts/")
+ext_folder1 = "d:/CloudStation/mygit_EXT/TCEM_related_vars/IT_cohorts/"
+library(pbapply)
+# library(stringr)
+# library(readxl)
+# library(seqinr)
+# library(tidyr)
+# packs <- c("pbapply", "readxl", "stringr", "magrittr", "survival", "testit", "ggplot2", "ggpubr", "survminer", "seqinr", "tidyr", "Rfast", "fastmatch", "org.Hs.eg.db")
+# invisible(lapply(packs, require, character.only = TRUE))
+#rm(packs)
+# options(warn = 0)
+```
+
+
+
+```{r}
+vcf_id = gsub("\\.vcf", "", list.files(paste0(ext_folder1, "objects/raw_vcf/")))
+chowell_data = read_excel(paste0(ext_folder1, "objects/aao4572_Chowell_SM-Table-S9.xlsx"))
+
+#SNYDER
+snyder = chowell_data[chowell_data$Reference == "Snyder et al. 2014",] #64
+table(snyder$Sample %in% vcf_id) #ALL
+
+#VAN ALLEN - 110
+vanallen = chowell_data[chowell_data$Reference == "Van Allen et al. 2015",] #100
+table(vanallen$Sample %in% vcf_id) #91 TRUE, 9 FALSE
+
+#HUGO 2016
+hugo = chowell_data[chowell_data$Reference == "Hugo et al. 2016",] #38
+table(hugo$Sample %in% vcf_id) #NONE
+
+#RIAZ
+riaz = chowell_data[chowell_data$Reference == "Riaz et al. 2017",] #68
+table(riaz$Sample %in% vcf_id) #NONE
+
+#RIZVI - LUNG
+rizvi = chowell_data[chowell_data$Reference == "Rizvi et al. 2015",] #34
+table(rizvi$Sample %in% vcf_id) #ALL
+rizvi_c = chowell_data[chowell_data$Reference == "Rizvi_CUMC",] #67
+table(rizvi_c$Sample %in% vcf_id) #NONE
+
+
+
+unique(chowell_data$Reference[!chowell_data$Sample %in% vcf_id])
+```
+
+#Collect peptides, calculate ratios
+
+##Snyder
+
+```{r}
+cohort_name = "snyder"
+vcf_snyder = gsub("\\.vcf", "", list.files(paste0(ext_folder1, "raw_vcf/", cohort_name, "/")))
+
+dtann1 = read.table("D:/CloudStation/fitness-model/create_neoantigens/annotated/AL4602.txt", header = F, stringsAsFactors = F, col.names = c("Uploaded_variation","Location","Allele","Gene","Feature","Feature_type","Consequence","cDNA_position","CDS_position","Protein_position","Amino_acids","Codons","Existing_variation","Extra"))
+mutations = matrix(NA, nrow = 0, ncol = ncol(dtann1), dimnames = list(NULL,colnames(dtann1)))
+rm(dtann1)
+
+for(i in vcf_snyder) {
+  tempannfile = read.table(paste0("D:/CloudStation/fitness-model/create_neoantigens/annotated/", i, ".txt"), header = F, stringsAsFactors = F, col.names = colnames(mutations))
+  mutations = rbind(mutations, tempannfile)
+}
+rm(tempannfile, i)
+
+mutations = mutations[mutations$Consequence == "missense_variant",]
+mutations$Consequence = NULL
+
+library(org.Hs.eg.db)
+ensg_hugo_matching = select(org.Hs.eg.db, keys = unique(mutations$Gene), columns = "SYMBOL", keytype = "ENSEMBL") #11.741
+View(ensg_hugo_matching[!is.na(ensg_hugo_matching$SYMBOL),])
+nrow(ensg_hugo_matching[is.na(ensg_hugo_matching$SYMBOL),]) #241
+enst_hugo_matching = select(org.Hs.eg.db, keys = unique(mutations$Feature), columns = "SYMBOL", keytype = "ENSEMBLTRANS")
+
+for(i in 1:nrow(ensg_hugo_matching)) {
+  if(!is.na(ensg_hugo_matching$SYMBOL[i])) next()
+  tempensg = ensg_hugo_matching$ENSEMBL[i]
+  tempenst = unique(mutations$Feature[mutations$Gene == tempensg])
+  tempSYM = enst_hugo_matching$SYMBOL[enst_hugo_matching$ENSEMBLTRANS %in% tempenst]
+  tempSYM = unique(tempSYM[!is.na(tempSYM)])
+  if(length(tempSYM) == 0) {
+    ensg_hugo_matching$SYMBOL[i] = NA
+  } else if(length(tempSYM) == 1) {
+    ensg_hugo_matching$SYMBOL[i] = tempSYM
+  } else {
+    ensg_hugo_matching$SYMBOL[i] = "moreID"
+  }
+}
+rm(i, tempensg, tempenst, tempSYM)
+ensg_hugo_matching = ensg_hugo_matching[!is.na(ensg_hugo_matching$SYMBOL),] #11.531
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$SYMBOL == "moreID"] = "ACBD6"
+rm(enst_hugo_matching)
+
+ensg_hugo_matching$ENSEMBL[duplicated(ensg_hugo_matching$ENSEMBL)] #♥65
+table(ensg_hugo_matching$ENSEMBL[substr(ensg_hugo_matching$SYMBOL,1,4) == "LOC1"] %in% ensg_hugo_matching$ENSEMBL[duplicated(ensg_hugo_matching$ENSEMBL)]) #29 TRUE
+ensg_hugo_matching = ensg_hugo_matching[substr(ensg_hugo_matching$SYMBOL,1,4) != "LOC1",] #11502
+
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000107014"] = "RLN2"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000120341"] = "SEC16B"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000257365"] = "FNTB"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000164053"] = "ATRIP"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000257046"] = "SLCO1B7"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000213160"] = "KLHL23"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000155307"] = "SAMSN1"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000166272"] = "WBP1L"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000149557"] = "FEZ1" 
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000241370"] = "RPP21"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000152926"] = "ZNF117"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000088298"] = "EDEM2"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000086200"] = "IPO11"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000128383"] = "APOBEC3A"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000133816"] = "MICAL2"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000156273"] = "BACH1"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000262628"] = "OR1D5"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000237541"] = "HLA-DQA2"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000204209"] = "DAXX"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000204131"] = "NHSL2"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000124343"] = "XG"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000223443"] = "USP17L2"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000228696"] = "ARL17B"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000143702"] = "CEP170"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000203668"] = "CHML"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000137843"] = "PAK6"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000145979"] = "TBC1D7"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000205456"] = "TP53TG3D"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000212127"] = "TAS2R14"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000112541"] = "PDE10A"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000213694"] = "S1PR3"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000115239"] = "ASB3"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000158301"] = "GPRASP2"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000163156"] = "SCNM1"
+ensg_hugo_matching$SYMBOL[ensg_hugo_matching$ENSEMBL == "ENSG00000186448"] = "ZNF197"
+  
+ensg_hugo_matching = unique(ensg_hugo_matching) #11.466
+  
+mutations = cbind(mutations, Hugo_Symbol = ensg_hugo_matching[match(mutations$Gene, ensg_hugo_matching$ENSEMBL),"SYMBOL"])
+rownames(mutations) = NULL
+mutations$Hugo_Symbol[is.na(mutations$Hugo_Symbol)] = "MISSINGHS"
+rm(ensg_hugo_matching)
+
+mutations = cbind(Tumor_Sample_Barcode = sapply(mutations$Uploaded_variation, function(x) strsplit(x, "_")[[1]][5]), mutations)
+mutations$origseq = pbsapply(mutations$Extra, function(x) gsub("WildtypeProtein=", "", grep("WildtypeProtein=", strsplit(x, ";")[[1]], value = T)))
+mutations = unique(mutations[,c("Tumor_Sample_Barcode", "Hugo_Symbol", "Protein_position", "Amino_acids", "origseq")]) #82.270
+
+mutations$origaa = pbsapply(mutations$Amino_acids, function(x) substr(x,1,1))
+mutations$mutaa = pbsapply(mutations$Amino_acids, function(x) substr(x,3,3))
+
+mutations = unite(mutations, "HGVSp_Short", origaa, Protein_position, mutaa, sep = "", remove = F)
+mutations$HGVSp_Short = paste0("p.", mutations$HGVSp_Short)
+mutations = mutations[,c("Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSp_Short", "Protein_position", "origaa", "mutaa", "origseq")]
+rownames(mutations) = NULL
+
+save(mutations, file = paste0(ext_folder1, "11out/",cohort_name, "/mutations_01"))
+```
+
+##Van Allen
+
+```{r}
+cohort_name = "vanallen"
+proteome = read.delim("D:/CloudStation/uniprot/uniprot-filtered-organism__Homo+sapiens+(Human)+[9606]_Entrez.tab")
+proteome = separate(data = proteome, col = "Cross.reference..GeneID.", into = paste0("Entrez", 1:14), sep = ";", remove = F, convert = T)
+
+mutations_raw = read_excel(paste0(ext_folder1,"VanAllen/TableS1.Mutation_list_all_patients.xlsx"))
+mutations = mutations_raw[,c("patient", "Hugo_Symbol", "Entrez_Gene_Id", "Variant_Classification", "Protein_Change")]
+mutations = subset(mutations, Variant_Classification == "Missense_Mutation")
+mutations$Variant_Classification = NULL
+mutations$Protein_position = pbsapply(mutations$Protein_Change, function(x) as.numeric(str_extract(x, "\\d+")))
+mutations$origaa = pbsapply(mutations$Protein_Change, function(x) unlist(str_extract_all(x, "[:upper:]"))[1])
+mutations$mutaa = pbsapply(mutations$Protein_Change, function(x) unlist(str_extract_all(x, "[:upper:]"))[2])
+colnames(mutations)[c(1,4)] = c("Tumor_Sample_Barcode", "HGVSp_Short")
+mutations$Entrez_Gene_Id = as.numeric(mutations$Entrez_Gene_Id)
+
+mutations$origseq = NA
+
+
+for(i in 1:nrow(mutations)) {
+  print(i)
+  tempdf = proteome[grepl(mutations$Hugo_Symbol[i], proteome$Gene.names...primary..) |
+                    grepl(mutations$Hugo_Symbol[i],proteome$Gene.names),]
+  tempdf2 = proteome[which(proteome == mutations$Entrez_Gene_Id[i], arr.ind = T)[1],]
+  tempdf = unique(rbind(tempdf, tempdf2))
+  if(nrow(tempdf) == 0) next()
+  tempdf = tempdf[sapply(tempdf$Sequence, function(x) substr(x,mutations$Protein_position[i],mutations$Protein_position[i]) == mutations$origaa[i]),]
+  if(nrow(tempdf) == 0) {
+    mutations$origseq[i] = NA
+  } else if(nrow(tempdf) == 1) {
+    mutations$origseq[i] = tempdf$Sequence
+  } else {
+    if("reviewed" %in% tempdf$Status) tempdf = tempdf[tempdf$Status == "reviewed",]
+    maxlen = max(tempdf$Length, na.rm=T)
+    mutations$origseq[i] = tempdf$Sequence[tempdf$Length == maxlen][1]
+  }
+}
+rm(proteome, tempdf, tempdf2, i, maxlen)
+nrow(mutations[is.na(mutations$origseq),]) #4306
+View(mutations[is.na(mutations$origseq),])
+mutations = mutations[!is.na(mutations$origseq),] #39929
+mutations = mutations[,c("Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSp_Short", "Protein_position", "origaa", "mutaa", "origseq")]
+rownames(mutations) = NULL
+
+save(mutations, file = paste0(ext_folder1, "11out/",cohort_name, "/mutations_01"))
+```
+
+##Hugo2016
+
+```{r}
+cohort_name = "hugo"
+proteome = read.delim("D:/CloudStation/uniprot/uniprot-filtered-organism__Homo+sapiens+(Human)+[9606]_.tab")
+mutations_extended = read.delim("D:/CloudStation/mygit_EXT/TCEM_related_vars/IT_cohorts/Hugo_2016/data_mutations_extended.txt")
+mutations = mutations_extended[,c("Tumor_Sample_Barcode", "Hugo_Symbol", "Variant_Classification", "Transcript_ID", "HGVSp_Short", "Protein_position")]
+mutations = mutations[mutations$Variant_Classification == "Missense_Mutation",]
+mutations$Variant_Classification = NULL
+mutations$origaa = pbsapply(mutations$HGVSp_Short, function(x) unlist(str_extract_all(x, "[:upper:]"))[1])
+mutations$mutaa = pbsapply(mutations$HGVSp_Short, function(x) unlist(str_extract_all(x, "[:upper:]"))[2])
+mutations = mutations[!grepl("\\*", mutations$HGVSp_Short),]
+rownames(mutations) = NULL
+
+options(warn = 2)
+mutations$origseq = NA
+
+for(i in 1:nrow(mutations)) {
+  print(i)
+  tempdf = proteome[grepl(mutations$Hugo_Symbol[i], proteome$Gene.names...primary..) |
+                    grepl(mutations$Hugo_Symbol[i],proteome$Gene.names) |
+                    grepl(mutations$Transcript_ID[i],proteome$Ensembl.transcript),]
+  if(nrow(tempdf) == 0) next()
+  tempdf = tempdf[sapply(tempdf$Sequence, function(x) substr(x,mutations$Protein_position[i],mutations$Protein_position[i]) == mutations$origaa[i]),]
+  if(nrow(tempdf) == 0) {
+    mutations$origseq[i] = NA
+  } else if(nrow(tempdf) == 1) {
+    mutations$origseq[i] = tempdf$Sequence
+  } else {
+    if("reviewed" %in% tempdf$Status) tempdf = tempdf[tempdf$Status == "reviewed",]
+    maxlen = max(tempdf$Length, na.rm=T)
+    mutations$origseq[i] = tempdf$Sequence[tempdf$Length == maxlen][1]
+  }
+}
+rm(proteome, tempdf, i, maxlen)
+nrow(mutations[is.na(mutations$origseq),]) #568
+View(mutations[is.na(mutations$origseq),])
+mutations = mutations[!is.na(mutations$origseq),] #22876
+mutations = mutations[,c("Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSp_Short", "Protein_position", "origaa", "mutaa", "origseq")]
+rownames(mutations) = NULL
+
+save(mutations, file = paste0(ext_folder1, "11out/",cohort_name, "/mutations_01"))
+```
+
+##Riaz2017
+
+```{r}
+cohort_name = "riaz"
+proteome = read.delim("D:/CloudStation/uniprot/uniprot-filtered-organism__Homo+sapiens+(Human)+[9606]_.tab")
+mutations_extended_raw = read_excel("D:/CloudStation/IT_cohorts/Riaz_2017/mmc3.xlsx", skip = 3)
+mutations = mutations_extended_raw[,c("Patient", "Hugo Symbol", "Variant Classification", "HGVS_p")]
+mutations = mutations[mutations$`Variant Classification` == "missense_variant",]
+mutations$`Variant Classification` = NULL
+colnames(mutations)[1:2] = c("Tumor_Sample_Barcode", "Hugo_Symbol")
+
+mutations$HGVS_p = gsub("p\\.", "", mutations$HGVS_p)
+mutations = mutations[!grepl("XXX", mutations$HGVS_p),]
+mutations$origaa = substr(mutations$HGVS_p,1,3)
+mutations$origaa = a(mutations$origaa)
+mutations$mutaa = pbsapply(mutations$HGVS_p, function(x) substr(x,nchar(x)-2, nchar(x)))
+mutations$mutaa = a(mutations$mutaa)
+mutations$Protein_position = unname(pbsapply(mutations$HGVS_p, function(x) as.numeric(str_extract(x, "\\d+"))))
+
+mutations = unite(mutations, "HGVSp_Short", origaa, Protein_position, mutaa, sep = "", remove = F)
+mutations$HGVS_p = NULL
+mutations$HGVSp_Short = paste0("p.", mutations$HGVSp_Short)
+
+mutations = mutations[,c("Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSp_Short", "Protein_position", "origaa", "mutaa")]
+rownames(mutations) = NULL
+
+options(warn = 2)
+mutations$origseq = NA
+
+for(i in 1:nrow(mutations)) {
+  print(i)
+  tempdf = proteome[grepl(mutations$Hugo_Symbol[i], proteome$Gene.names...primary..) |
+                    grepl(mutations$Hugo_Symbol[i],proteome$Gene.names),]
+  if(nrow(tempdf) == 0) next()
+  tempdf = tempdf[sapply(tempdf$Sequence, function(x) substr(x,mutations$Protein_position[i],mutations$Protein_position[i]) == mutations$origaa[i]),]
+  if(nrow(tempdf) == 0) {
+    mutations$origseq[i] = NA
+  } else if(nrow(tempdf) == 1) {
+    mutations$origseq[i] = tempdf$Sequence
+  } else {
+    if("reviewed" %in% tempdf$Status) tempdf = tempdf[tempdf$Status == "reviewed",]
+    maxlen = max(tempdf$Length, na.rm=T)
+    mutations$origseq[i] = tempdf$Sequence[tempdf$Length == maxlen][1]
+  }
+}
+rm(proteome, tempdf, i, maxlen)
+nrow(mutations[is.na(mutations$origseq),]) #1888
+View(mutations[is.na(mutations$origseq),])
+
+mutations = mutations[!is.na(mutations$origseq),] #23548
+rownames(mutations) = NULL
+save(mutations, file = paste0(ext_folder1, "11out/",cohort_name, "/mutations_01"))
+```
+
+#Determine -8 +8 region
+
+```{r}
+cohort_name = "snyder"
+#cohort_name = "vanallen"
+#cohort_name = "hugo"
+#cohort_name = "riaz"
+
+load(paste0(ext_folder1, "11out/",cohort_name, "/mutations_01"))
+
+mutations$validmut = pbapply(mutations, 1, function(x) substr(x[7],as.numeric(x[4]),as.numeric(x[4])) == x[5])
+table(mutations$validmut)
+mutations$validmut = NULL
+
+mutations$protlen = nchar(mutations$origseq)
+mutations$mutseq = pbapply(mutations, 1, function(x) paste0(substr(x[7],1,as.numeric(x[4])-1),x[6],substr(x[7],as.numeric(x[4])+1,x[8])))
+
+aaregion = t(pbapply(mutations, 1, function(x) {
+  temppos = as.numeric(x[4])
+  templen = as.numeric(x[8])
+  temporigseq = x[7]
+  tempmutseq = x[9]
+  if(temppos<9) {
+    out = c(substr(temporigseq,1,temppos+8),substr(tempmutseq,1,temppos+8))
+  } else if(temppos>templen-8) {
+    out = c(substr(temporigseq,temppos-8,templen),substr(tempmutseq,temppos-8,templen))
+  } else {
+    out = c(substr(temporigseq,temppos-8,temppos+8),substr(tempmutseq,temppos-8,temppos+8))
+  }
+  out
+}))
+colnames(aaregion) = c("origreg", "mutreg")
+mutations = cbind(mutations, aaregion)
+rm(aaregion)
+
+mutations = mutations[nchar(mutations$origreg)>=9,]
+mutations = mutations[,c("Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSp_Short", "protlen", "Protein_position", "origaa", "mutaa", "origseq", "mutseq", "origreg", "mutreg")]
+
+save(mutations, file = paste0(ext_folder1, "11out/",cohort_name, "/mutations"))
+```
+
+##Modification in Synder dataset
+
+```{r}
+mutations$reglen = nchar(mutations$origreg)
+####Unique based on Tumor_Sample_Barcode, Hugo_Symbol, origreg, mutreg
+mutations2 = unite(data = mutations, col = "tempcol", "Tumor_Sample_Barcode", "Hugo_Symbol", "origreg", "mutreg", sep = "_", remove = F)
+temp = unique(mutations2$tempcol)
+mutations_un = matrix(NA, nrow = 0, ncol = ncol(mutations), dimnames = list(NULL, colnames(mutations)))
+for(i in 1:length(temp)) {
+  print(i)
+  tempmuts = mutations2[mutations2$tempcol == temp[i],]
+  tempmuts = tempmuts[tempmuts$reglen == max(tempmuts$reglen),]
+  tempmuts = tempmuts[which.max(tempmuts$protlen),]
+  mutations_un = rbind(mutations_un, tempmuts[,2:13])
+}
+rm(i, tempmuts)
+proba = mutations_un[duplicated(mutations_un[,c("Tumor_Sample_Barcode", "Hugo_Symbol", "origaa", "mutaa")]),]
+rm(mutations2, proba)
+
+##Unique based on Tumor_Sample_Barcode, Hugo_Symbol, HGVSp_Short
+mutations2 = unite(data = mutations_un, col = "tempcol", "Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSp_Short", sep = "_", remove = F)
+temp = unique(mutations2$tempcol)
+mutations_un2 = matrix(NA, nrow = 0, ncol = ncol(mutations), dimnames = list(NULL, colnames(mutations)))
+for(i in 1:length(temp)) {
+  print(i)
+  tempmuts = mutations2[mutations2$tempcol == temp[i],]
+  tempmuts = tempmuts[tempmuts$reglen == max(tempmuts$reglen),]
+  mutations_un2 = rbind(mutations_un2, tempmuts[,2:13])
+}
+rm(i, tempmuts)
+
+#Drop duplicated mutations based on correct amino acid length
+proteome = read.delim("D:/CloudStation/uniprot/uniprot-filtered-reviewed_yes+AND+organism__Homo+sapiens+(Human)+[96--ENTRY_GENENAMESPRIMARY_LENGTH.tab")
+mutations2 = unite(data = mutations_un, col = "tempcol", "Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSp_Short", sep = "_", remove = F)
+temp = unique(mutations2$tempcol)
+mutations_un3 = matrix(NA, nrow = 0, ncol = ncol(mutations), dimnames = list(NULL, colnames(mutations)))
+for(i in 1:length(temp)) {
+  print(i)
+  tempmuts = mutations2[mutations2$tempcol == temp[i],]
+  if(nrow(tempmuts)>1) {
+    temphugo = tempmuts$Hugo_Symbol[1]
+    validprotlen = proteome$Length[proteome$Gene.names...primary.. == temphugo]
+    tempmuts = tempmuts[tempmuts$protlen == validprotlen,]
+  }
+  mutations_un3 = rbind(mutations_un3, tempmuts[,2:13])
+}
+rm(i, tempmuts)
+
+mutations = mutations_un3
+
+save(mutations, file = paste0(ext_folder1, "11out/",cohort_name, "/mutations"))
+```
+
+
+#Peptides per sample
+
+```{r}
+cohort_name = "snyder"
+#cohort_name = "vanallen"
+#cohort_name = "hugo"
+#cohort_name = "riaz"
+load(paste0(ext_folder1, "11out/",cohort_name, "/mutations"))
+dir.create(paste0(ext_folder1,"11out/", cohort_name, "/nonamers"))
+ids = sort(unique(mutations$Tumor_Sample_Barcode))
+pbsapply(ids, function(x) {
+  neoeps_list = lapply(mutations$mutreg[mutations$Tumor_Sample_Barcode == x], function(a) substring(a, 1:(nchar(a)-8), 9:nchar(a)))
+  peps = sort(unique(unlist(neoeps_list)))
+  writeLines(peps, paste0(ext_folder1, "11out/", cohort_name, "/nonamers/", x, ".pep"))
+})
+```
+
+#Collect genotypes
+##Snyder
+
+```{r}
+chowell_data = read_excel(paste0(ext_folder1, "objects/aao4572_Chowell_SM-Table-S9.xlsx"))
+snyder = chowell_data[chowell_data$Reference == "Snyder et al. 2014",]
+genotypes = t(pbsapply(snyder$`HLA Class I Alleles`, function(x) strsplit(x, ",")[[1]]))
+genotypes = apply(genotypes,2,function(x) paste0("HLA-",substr(x,1,3), ":", substr(x,4,5)))
+rownames(genotypes) = snyder$Sample
+
+pbsapply(rownames(genotypes), function(x) {
+  alleles = genotypes[x,]
+  writeLines(alleles, paste0("D:/CloudStation/mygit_EXT/TCEM_related_vars/IT_cohorts/11out/snyder/alleles/", x, ".txt"))
+})
+
+```
+
+##VanAllen
+
+```{r}
+clinical = read_excel(paste0(ext_folder1,"VanAllen/TableS2_Revised.xlsx"))
+genotypes = clinical[,c("hla.a1", "hla.a2", "hla.b1", "hla.b2", "hla.c1", "hla.c2")]
+rownames(genotypes) = clinical$patient
+pbsapply(rownames(genotypes), function(x) {
+  alleles = as.character(genotypes[x,])
+  writeLines(alleles, paste0("D:/CloudStation/mygit_EXT/TCEM_related_vars/IT_cohorts/11out/vanallen/alleles/", x, ".txt"))
+})
+
+```
+
+##Hugo
+
+```{r}
+data_clinical_sample = read.delim("D:/CloudStation/mygit_EXT/TCEM_related_vars/IT_cohorts/Hugo_2016/data_clinical_sample.txt", skip = 4)
+data_clinical_sample = data_clinical_sample[data_clinical_sample$PATIENT_ID != "Pt8",]
+genotypes = t(pbapply(data_clinical_sample, 1, function(x) c(strsplit(x[6], "/")[[1]],strsplit(x[7], "/")[[1]],strsplit(x[8], "/")[[1]])))
+genotypes = apply(genotypes,2,function(x) paste0("HLA-",substr(x,1,3), ":", substr(x,4,5)))
+rownames(genotypes) = data_clinical_sample$PATIENT_ID
+
+pbsapply(rownames(genotypes), function(x) {
+  alleles = genotypes[x,]
+  writeLines(alleles, paste0("D:/CloudStation/mygit_EXT/TCEM_related_vars/IT_cohorts/11out/hugo/alleles/", x, ".txt"))
+})
+```
+
+##Riaz
+
+```{r}
+chowell_data = read_excel("D:/CloudStation/mygit_EXT/TCEM_related_vars/IT_cohorts/objects/aao4572_Chowell_SM-Table-S9.xlsx")
+riaz = chowell_data[chowell_data$Reference == "Riaz et al. 2017",]
+genotypes = t(pbsapply(riaz$`HLA Class I Alleles`, function(x) strsplit(x, ",")[[1]]))
+genotypes = apply(genotypes,2,function(x) paste0("HLA-",substr(x,1,3), ":", substr(x,4,5)))
+rownames(genotypes) = riaz$Sample
+
+pbsapply(rownames(genotypes), function(x) {
+  alleles = genotypes[x,]
+  writeLines(alleles, paste0("D:/CloudStation/mygit_EXT/TCEM_related_vars/IT_cohorts/11out/riaz/alleles/", x, ".txt"))
+})
+```
+
+#Determine TCEM mutated binding peptides and TCEM properties
+
+```{r}
+cohort_name = "snyder"
+# cohort_name = "vanallen"
+# cohort_name = "hugo"
+# cohort_name = "riaz"
+
+load(paste0(ext_folder1, "objects/pentamerfreq_tcem"))
+load(paste0(ext_folder1, "objects/exprmeds"))
+load(paste0(ext_folder1, "objects/thymomeds"))
+load(paste0(ext_folder1, "objects/immunomeds"))
+
+load(paste0(ext_folder1, "11out/", cohort_name, "/mutations"))
+ids = unique(mutations$Tumor_Sample_Barcode)
+dir.create(paste0(ext_folder1,"11out/", cohort_name, "/tcem_mutated_nonamers"))
+
+i=0
+pbsapply(ids, function(x) {
+  i = i+1
+  .GlobalEnv$i = i
+  neoeps_list = lapply(mutations$mutreg[mutations$Tumor_Sample_Barcode == x], function(a) substring(a, 1:(nchar(a)-8), 9:nchar(a)))
+  origeps_list = lapply(mutations$origreg[mutations$Tumor_Sample_Barcode == x], function(a) substring(a, 1:(nchar(a)-8), 9:nchar(a)))
+  muts = mutations[mutations$Tumor_Sample_Barcode == x,c("Tumor_Sample_Barcode", "Hugo_Symbol", "HGVSp_Short")]
+  muts = unite(muts, "mut", Tumor_Sample_Barcode, Hugo_Symbol, HGVSp_Short, sep = ".", remove = T)
+  muts = muts$mut
+  nonamers = cbind(mut = rep(muts, lengths(neoeps_list)), origeps = unlist(origeps_list), neoeps = unlist(neoeps_list))
+  nonamers = cbind(nonamers, origtcem = substr(nonamers[,"origeps"],4,8), neotcem = substr(nonamers[,"neoeps"],4,8))
+  nonamers = as.data.frame(nonamers)
+  nonamers$mutpos = apply(nonamers, 1, function(z) which(Reduce("!=", strsplit(c(z[2], z[3]), split = ""))))
+  nonamers$tcemmut = nonamers$mutpos > 3 & nonamers$mutpos < 9
+  nonamers = nonamers[nonamers$tcemmut == TRUE,]
+  load(paste0(ext_folder1, "11out/", cohort_name, "/binding_matrices/binding_matrix_", x))
+  nonamers$neoaffmin = colMins(binding_matrix$aff[,nonamers$neoeps], value = T)
+  nonamers$neorpmin = colMins(binding_matrix$rp[,nonamers$neoeps], value = T)
+  nonamers$neoaffweak = nonamers$neoaffmin<500
+  nonamers$neoaffstr = nonamers$neoaffmin<50
+  nonamers$neorpweak = nonamers$neorpmin<2
+  nonamers$neorpstr = nonamers$neorpmin<.5
+  nonamers$neofreq = sapply(nonamers$neotcem, function(y) pentamerfreq_tcem[fmatch(y,names(pentamerfreq_tcem))])
+  nonamers$neoexpr = sapply(nonamers$neotcem, function(y) exprmeds[fmatch(y,names(exprmeds))])
+  nonamers$neothymo = sapply(nonamers$neotcem, function(y) thymomeds[fmatch(y,names(thymomeds))])
+  nonamers$neoimmuno = sapply(nonamers$neotcem, function(y) immunomeds[fmatch(y,names(immunomeds))])
+  save(nonamers, file = paste0(ext_folder1,"11out/", cohort_name, "/tcem_mutated_nonamers/", x))
+})
+
+load(paste0(ext_folder1,"11out/", cohort_name, "/tcem_mutated_nonamers/", ids[10]))
+rm(mutations, cohort_name, i, ids)
+rm(exprmeds, immunomeds, pentamerfreq_tcem, thymomeds)
+```
+
+#Calculate TCEM related variables
+
+```{r}
+cohort_name = "vanallen"
+cohort_name = "hugo"
+cohort_name = "riaz"
+
+cutp_expr1 = 0.203075
+cutp_expr2 = 1.095007
+cutp_th = 0.914470
+load(paste0(ext_folder1, "objects/immunomeds"))
+cutp_im1 = median(immunomeds, na.rm = T)
+cutp_im2 = unname(quantile(immunomeds,.75,na.rm = T))
+cutp_im3 = unname(quantile(immunomeds,.9,na.rm = T))
+rm(immunomeds)
+
+ids = list.files(paste0(ext_folder1, "11out/", cohort_name, "/tcem_mutated_nonamers/"))
+vals = c("neoaffweak", "neoaffstr", "neorpweak", "neorpstr")
+
+sort(pbsapply(ids, function(x) {
+  load(paste0(ext_folder1, "11out/", cohort_name, "/tcem_mutated_nonamers/", x))
+  nrow(nonamers)
+}))
+
+i=0
+pat_ratio = t(pbsapply(ids, function(x) {
+  i = i+1
+  .GlobalEnv$i = i
+  
+  load(paste0(ext_folder1, "11out/", cohort_name, "/tcem_mutated_nonamers/", x))
+  
+  ratios = lapply(vals, function(y) {
+    tdf = nonamers %>% dplyr::rename(binding = y) %>% dplyr::filter(binding == TRUE)
+    #FREQ
+    nf = nrow(tdf)
+    lf = sum(tdf$neofreq<4)/nf
+    lorhf = sum(tdf$neofreq<4 | tdf$neofreq>=8) / nf
+    #EXPR
+    tdf_expr = subset(tdf, !is.na(neoexpr))
+    ne = nrow(tdf_expr)
+    le = sum(tdf_expr$neoexpr<cutp_expr1) / ne
+    lorhe = sum(tdf_expr$neoexpr<cutp_expr1 | tdf_expr$neoexpr>cutp_expr2) / ne
+    #THYMO
+    tdf_thymo = subset(tdf, !is.na(neothymo))
+    nt = nrow(tdf_thymo)
+    lt = sum(tdf_thymo$neothymo<cutp_th) / nt
+    
+    #combinations - 2
+    ##FREQ & EXPR
+    lfle = sum(tdf_expr$neofreq<4 & tdf_expr$neoexpr<cutp_expr1) / ne
+    lorhfle = sum((tdf_expr$neofreq<4 | tdf_expr$neofreq>=8) & tdf_expr$neoexpr<cutp_expr1) / ne
+    lflorhe = sum(tdf_expr$neofreq<4 & (tdf_expr$neoexpr<cutp_expr1|tdf_expr$neoexpr>=cutp_expr2)) / ne
+    lorhflorhe = sum((tdf_expr$neofreq<4 | tdf_expr$neofreq>=8) & (tdf_expr$neoexpr<cutp_expr1|tdf_expr$neoexpr>=cutp_expr2)) / ne
+    ##FREQ & THYMO
+    lflt = sum(tdf_thymo$neofreq<4 & tdf_thymo$neothymo<cutp_th) / nt
+    lorhflt = sum((tdf_thymo$neofreq<4 | tdf_thymo$neofreq>=8) & tdf_thymo$neothymo<cutp_th) / nt
+    ##EXPR & THYMO
+    tdf_et = subset(tdf, !is.na(neoexpr) & !is.na(neothymo))
+    net = nrow(tdf_et)
+    lelt = sum(tdf_et$neoexpr<cutp_expr1 & tdf_et$neothymo<cutp_th) / net
+    lorhelt = sum((tdf_et$neoexpr<cutp_expr1|tdf_et$neoexpr>=cutp_expr2) & tdf_et$neothymo<cutp_th) / net
+    
+    #combination - 3
+    lflelt = sum(tdf_et$neofreq<4 & tdf_et$neoexpr<cutp_expr1 & tdf_et$neothymo<cutp_th) / net
+    lorhflelt = sum((tdf_et$neofreq<4 | tdf_et$neofreq>=8) & tdf_et$neoexpr<cutp_expr1 & tdf_et$neothymo<cutp_th) / net
+    lflorhelt = sum(tdf_et$neofreq<4 & (tdf_et$neoexpr<cutp_expr1 | tdf_et$neoexpr>=cutp_expr2) & tdf_et$neothymo<cutp_th) / net
+    lorhflorhelt = sum((tdf_et$neofreq<4 | tdf_et$neofreq>=8) & (tdf_et$neoexpr<cutp_expr1 | tdf_et$neoexpr>=cutp_expr2) & tdf_et$neothymo<cutp_th) / net
+    
+    #immuno - higher than cutoffs
+    tdf_immuno = subset(tdf, !is.na(neoimmuno))
+    ni = nrow(tdf_immuno)
+    hi1 = sum(tdf_immuno$neoimmuno>cutp_im1) / ni
+    hi2 = sum(tdf_immuno$neoimmuno>cutp_im2) / ni
+    hi3 = sum(tdf_immuno$neoimmuno>cutp_im3) / ni
+    ratios = c(nf, ne, nt, net, ni, lf, lorhf, le, lorhe, lt, lfle, lorhfle, lflorhe, lorhflorhe, lflt, lorhflt, lelt, lorhelt, lflelt, lorhflelt, lflorhelt, lorhflorhelt, hi1, hi2, hi3) #vars*
+    ratios
+  })
+  ratios = do.call(rbind, ratios)
+  colnames(ratios) = c("nFREQ", "nEXPR", "nTHYMO", "nEXPR_THYMO", "nIMMUNO", "FREQ_low", "FREQ_loh", "EXPR_low", "EXPR_loh", "THYMO_low", "FREQ_low_EXPR_low", "FREQ_loh_EXPR_low", "FREQ_low_EXPR_loh", "FREQ_loh_EXPR_loh", "FREQ_low_THYMO_low", "FREQ_loh_THYMO_low", "EXPR_low_THYMO_low", "EXPR_loh_THYMO_low", "FREQ_low_EXPR_low_THYMO_low", "FREQ_loh_EXPR_low_THYMO_low", "FREQ_low_EXPR_loh_THYMO_low", "FREQ_loh_EXPR_loh_THYMO_low", "hi1", "hi2", "hi3")
+  ratios = as.data.frame(ratios)
+  ratios = cbind(binding = vals, ratios)
+  ratios = pivot_wider(data = ratios, names_from = binding, values_from = 2:26, names_glue = "{binding}_{.value}")
+  cn = colnames(ratios)
+  ratios = as.numeric(ratios)
+  names(ratios) = cn
+  ratios
+}))
+
+pat_ratio = as.data.frame(pat_ratio)
+save(pat_ratio, file = paste0(ext_folder1,"11out/",cohort_name, "/pat_ratio"))
+```
+
+#Patients characteristics
+##VanAllen
+
+```{r}
+ids = list.files(paste0(ext_folder1, "11out/vanallen/tcem_mutated_nonamers/"))
+clinical = read_excel(paste0(ext_folder1,"VanAllen/TableS2_Revised.xlsx"))
+clinical = clinical[clinical$patient %in% ids,]
+
+mutcnt = pbsapply(ids, function(x) {
+  load(paste0(ext_folder1, "11out/vanallen/tcem_mutated_nonamers/", x))
+  length(unique(nonamers$mut))
+})
+all(names(mutcnt) == clinical$patient)
+cor.test(mutcnt, clinical$nonsynonymous, method = "spearman")
+plot(mutcnt, clinical$nonsynonymous)
+
+colnames(clinical)[1] = "sampleid"
+colnames(clinical)[21] = "OS_Event"
+clinical$OS_Months = clinical$overall_survival/30.417
+clinical$Cancer.Type = "Melanoma"
+clinical$Drug.Class = "CTLA-4"
+clinical$TMB = mutcnt
+
+pat_char = clinical[,c("sampleid","OS_Months", "OS_Event", "Drug.Class", "Cancer.Type", "TMB")]
+save(pat_char, file = paste0(ext_folder1, "11out/vanallen/pat_char"))
+rm(clinical, ids, mutcnt)
+
+load(paste0(ext_folder1, "11out/vanallen/pat_ratio"))
+cohort = cbind(pat_char, pat_ratio[match(pat_char$sampleid, rownames(pat_ratio)),])
+save(cohort, file = paste0(ext_folder1, "11out/vanallen/cohort"))
+
+```
+
+
+##Hugo2016
+
+```{r}
+ids = list.files(paste0(ext_folder1, "11out/hugo/tcem_mutated_nonamers/"))
+clinical = read.delim(paste0(ext_folder1, "Hugo_2016/data_clinical_patient.txt"), skip = 4)
+clinical = clinical[clinical$PATIENT_ID %in% ids,]
+data_clinical_sample = read.delim(paste0(ext_folder1, "Hugo_2016/data_clinical_sample.txt"), skip = 4)
+data_clinical_sample = data_clinical_sample[data_clinical_sample$PATIENT_ID %in% ids,]
+
+mutcnt = pbsapply(ids, function(x) {
+  load(paste0(ext_folder1, "11out/hugo/tcem_mutated_nonamers/", x))
+  length(unique(nonamers$mut))
+})
+all(names(mutcnt) == data_clinical_sample$PATIENT_ID)
+cor.test(mutcnt, data_clinical_sample$MUTATION_LOAD, method = "spearman")
+plot(mutcnt, data_clinical_sample$MUTATION_LOAD)
+
+clinical$OS_Event = NA
+clinical$OS_Event[clinical$OS_STATUS == "0:LIVING"] = 0
+clinical$OS_Event[clinical$OS_STATUS == "1:DECEASED"] = 1
+
+clinical$Cancer.Type = "Melanoma"
+
+# clinical$Age.Group = NA
+# clinical$Age.Group[clinical$AGE_AT_DIAGNOSIS < 30] = "<30"
+# clinical$Age.Group[clinical$AGE_AT_DIAGNOSIS > 30 & clinical$AGE_AT_DIAGNOSIS <= 50] = "31-50"
+# clinical$Age.Group[clinical$AGE_AT_DIAGNOSIS > 50 & clinical$AGE_AT_DIAGNOSIS <= 60] = "51-60"
+# clinical$Age.Group[clinical$AGE_AT_DIAGNOSIS > 60 & clinical$AGE_AT_DIAGNOSIS <= 70] = "61-70"
+# clinical$Age.Group[clinical$AGE_AT_DIAGNOSIS > 70] = ">71"
+# clinical$Age.Group = factor(clinical$Age.Group, levels = c("<30","31-50","51-60","61-70",">71"))
+# table(clinical$Age.Group)
+
+clinical$TMB = mutcnt
+
+colnames(clinical)[c(1,3,6)] = c("sampleid", "OS_Months", "Drug.Class")
+
+pat_char = clinical[,c("sampleid","OS_Months", "OS_Event", "Drug.Class", "Cancer.Type", "TMB")]
+save(pat_char, file = paste0(ext_folder1, "11out/hugo/pat_char"))
+rm(clinical, data_clinical_sample, ids, mutcnt)
+
+load(paste0(ext_folder1, "11out/hugo/pat_ratio"))
+cohort = cbind(pat_char, pat_ratio[match(pat_char$sampleid, rownames(pat_ratio)),])
+save(cohort, file = paste0(ext_folder1, "11out/hugo/cohort"))
+```
+
+##Riaz2017
+n=68
+previously progressed on ipilimumab (Ipi) therapy (Ipi-P) n=35
+Ipi-naive (Ipi-N) n=33
+Response: CR: complete response, NE: , PD: progressive disease, PR: partial response, SD: stable disease
+
+```{r}
+clinical = read_excel(paste0(ext_folder1, "Riaz_2017/mmc2.xlsx"), skip = 2)
+
+ids = list.files(paste0(ext_folder1, "11out/riaz/tcem_mutated_nonamers/"))
+clinical = clinical[clinical$Patient %in% ids,]
+
+mutcnt = pbsapply(ids, function(x) {
+  load(paste0(ext_folder1, "11out/riaz/tcem_mutated_nonamers/", x))
+  length(unique(nonamers$mut))
+})
+
+all(names(mutcnt) == clinical$Patient)
+cor.test(mutcnt, as.numeric(clinical$`Mutation Load`), method = "spearman")
+plot(mutcnt, as.numeric(clinical$`Mutation Load`))
+
+clinical$OS_Event = NA
+clinical$OS_Event[clinical$`Dead/Alive\r\n(Dead = True)` == FALSE] = 0
+clinical$OS_Event[clinical$`Dead/Alive\r\n(Dead = True)` == TRUE] = 1
+clinical$OS_Months = (clinical$`Time to Death\r\n(weeks)`*7)/30.417
+clinical$Cancer.Type = "Melanoma"
+clinical$Drug.Class = "Nivolumab"
+clinical$TMB = mutcnt
+
+colnames(clinical)[1] = "sampleid"
+
+pat_char = clinical[,c("sampleid","OS_Months", "OS_Event", "Drug.Class", "Cancer.Type", "TMB")]
+save(pat_char, file = paste0(ext_folder1, "11out/riaz/pat_char"))
+
+load(paste0(ext_folder1, "11out/riaz/pat_ratio"))
+cohort = cbind(pat_char, pat_ratio[match(pat_char$sampleid, rownames(pat_ratio)),])
+save(cohort, file = paste0(ext_folder1, "11out/riaz/cohort"))
+```
+
+#Unite all cohorts
+
+
+```{r}
+chowell_data = read_excel(paste0(ext_folder1, "objects/aao4572_Chowell_SM-Table-S9.xlsx"))
+load(paste0(ext_folder1,"09out/cohort"))
+
+#Snyder
+snyder_ids = chowell_data$Sample[chowell_data$Reference == "Snyder et al. 2014"]
+snyder = cohort[cohort$sampleid %in% snyder_ids,]
+rm(snyder_ids)
+
+#Van Allen - melanoma
+load(paste0(ext_folder1, "11out/vanallen/cohort"))
+vanallen = cohort
+
+#Rizvi
+rizvi_ids = chowell_data$Sample[chowell_data$Reference == "Rizvi et al. 2015"]
+rizvi = cohort[cohort$sampleid %in% rizvi_ids,]
+rm(rizvi_ids)
+
+#Hugo
+load(paste0(ext_folder1, "11out/hugo/cohort"))
+hugo = cohort
+
+#Riaz
+load(paste0(ext_folder1, "11out/riaz/cohort"))
+riaz = cohort
+
+cohort = rbind(cbind(cohort = "snyder", snyder), cbind(cohort = "vanallen", vanallen), cbind(cohort = "rizvi", rizvi), cbind(cohort = "hugo", hugo), cbind(cohort = "riaz", riaz))
+save(cohort, file = paste0(ext_folder1, "11out/cohort_all5"))
+```
+
+#Survival
+
+```{r}
+load(paste0(ext_folder1, "11out/cohort_all5"))
+
+# value_count_var_matching = data.frame(tcemvar = tcemvars, countvar = NA)
+# for(i in 1:nrow(value_count_var_matching)) {
+#   if(grepl("_EXPR", value_count_var_matching$tcemvar[i]) & 
+#      grepl("_THYMO", value_count_var_matching$tcemvar[i])) {
+#     value_count_var_matching$countvar[i] = paste0(strsplit(value_count_var_matching$tcemvar[i], "_")[[1]][1], "_nEXPR_THYMO")
+#   } else if(grepl("_THYMO", value_count_var_matching$tcemvar[i])) {
+#     value_count_var_matching$countvar[i] = paste0(strsplit(value_count_var_matching$tcemvar[i], "_")[[1]][1], "_nTHYMO")
+#   } else if(grepl("_EXPR", value_count_var_matching$tcemvar[i])) {
+#     value_count_var_matching$countvar[i] = paste0(strsplit(value_count_var_matching$tcemvar[i], "_")[[1]][1], "_nEXPR")
+#   } else if(grepl("_FREQ", value_count_var_matching$tcemvar[i])) {
+#     value_count_var_matching$countvar[i] = paste0(strsplit(value_count_var_matching$tcemvar[i], "_")[[1]][1], "_nFREQ")
+#   } else {
+#     value_count_var_matching$countvar[i] = paste0(strsplit(value_count_var_matching$tcemvar[i], "_")[[1]][1], "_nIMMUNO")
+#   }
+# }
+# rm(i)
+# save(value_count_var_matching, file = paste0(ext_folder1,"11out/value_count_var_matching"))
+load(paste0(ext_folder1,"11out/value_count_var_matching"))
+
+tcemvars = grep("_l|_h", colnames(cohort), value = T)
+
+res = expand.grid(cohort = c("all", unique(cohort$cohort), "melanoma"), tcemv = tcemvars, tcemv.cutpoint = seq(0.05,0.6,0.05), tcemv_filter = c("no", "yes"), stringsAsFactors = F)
+res_ftest = res
+res %<>%
+  mutate(m34n = NA, TMBcor_rho = NA, TMBcor_p = NA, m3coef = NA, m3p = NA, m3warning = NA,
+         m4lown = NA, m4highn = NA, m4coef = NA, m4p = NA, m4warning = NA)
+res_ftest %<>%
+  mutate(m3p = NA, m3globalp = NA, m3warning = NA, m4p = NA, m4globalp = NA, m4warning = NA)
+
+for(i in 1:nrow(res)) {
+  tryCatch({  
+    print(i)
+    temptcemvar = res$tcemv[i]
+    tempcountvar = value_count_var_matching$countvar[value_count_var_matching$tcemvar == temptcemvar]
+    if(res$cohort[i] == "melanoma") {
+      cohort_f = subset(cohort, Cancer.Type == "Melanoma")
+    } else if(res$cohort[i] == "all") {
+      cohort_f = cohort
+    } else {
+      cohort_f = subset(cohort, cohort == res$cohort[i])
+    }
+    cohort_f %<>% 
+      dplyr::rename(countvar = tempcountvar, tcemvar = temptcemvar) %>% 
+      dplyr::filter(!is.na(tcemvar)) %>% 
+      dplyr::select(sampleid, OS_Months, OS_Event, TMB, countvar, tcemvar)
+    if(res$tcemv_filter[i] == "yes") cohort_f %<>% dplyr::filter(countvar >= 10) #more than 10 neopeptide
+    cohort_f$tcemvargroup = cut(x = cohort_f$tcemvar, breaks = c(0,res$tcemv.cutpoint[i],1), include.lowest = T, labels = F, right = F)
+    cohort_f %<>% na.omit()
+    res$m34n[i] = nrow(cohort_f)
+    if(nrow(subset(cohort_f, OS_Event == 1)) <= 3) next()
+    if(nrow(subset(cohort_f, tcemvargroup == 1)) <= 3 | nrow(subset(cohort_f, tcemvargroup == 2)) <= 3) next()
+    res$TMBcor_rho[i] = cor.test(cohort_f$TMB, cohort_f$tcemvar, method = "spearman")$estimate
+    res$TMBcor_p[i] = cor.test(cohort_f$TMB, cohort_f$tcemvar, method = "spearman")$p.value
+    if(nrow(cohort_f) < 10) next()
+    m3 = coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvar, data = cohort_f)
+    res$m3coef[i] = as.matrix(coef(summary(m3)))["tcemvar","coef"]
+    res$m3p[i] = as.matrix(coef(summary(m3)))["tcemvar","Pr(>|z|)"]
+    res$m3warning[i] = has_warning(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvar, data = cohort_f))
+    ftestm3 = cox.zph(m3)
+    res_ftest$m3p[i] = ftestm3$table["tcemvar","p"]
+    res_ftest$m3globalp[i] = ftestm3$table["GLOBAL","p"]
+    res_ftest$m3warning[i] = has_warning(cox.zph(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvar, data = cohort_f)))
+    res$m4lown[i] = table(cohort_f$tcemvargroup)["1"]
+    res$m4highn[i] = table(cohort_f$tcemvargroup)["2"]
+    m4 = coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f)
+    res$m4coef[i] = as.matrix(coef(summary(m4)))["tcemvargroup","coef"]
+    res$m4p[i] = as.matrix(coef(summary(m4)))["tcemvargroup","Pr(>|z|)"]
+    res$m4warning[i] = has_warning(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f))
+    ftestm4 = cox.zph(m4)
+    res_ftest$m4p[i] = ftestm4$table["tcemvargroup","p"]
+    res_ftest$m4globalp[i] = ftestm4$table["GLOBAL","p"]
+    res_ftest$m4warning[i] = has_warning(cox.zph(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f)))
+  }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+}
+
+rm(cohort_f, ftestm3, ftestm4, m3, m4, value_count_var_matching, i, tempcountvar, temptcemvar)
+
+colnames(res_ftest)[5:10] = paste("ftest", colnames(res_ftest)[5:10], sep = "_")
+res = cbind(res, res_ftest[,5:10])
+save(res, file = paste0(ext_folder1,"11out/survival_all"))
+
+```
+
+#Results:
+
+```{r}
+load(paste0(ext_folder1,"11out/survival_all"))
+res %>% 
+  dplyr::filter(tcemv_filter == "yes", m3p < 0.05, m4p < 0.05) %>% 
+  View()
+res %>% 
+  dplyr::filter(tcemv_filter == "yes", m3p < 0.05, m4p < 0.05, m4lown >= 20, m4highn >= 20) %>% 
+  View()
+
+res %>% 
+  dplyr::filter(tcemv_filter == "yes", m3p < 0.05, m4p < 0.05) %>% 
+  dplyr::select(tcemv) %>% 
+  table() %>% 
+  sort()
+
+res %>% 
+  dplyr::filter(tcemv_filter == "yes", m3p < 0.05, m4p < 0.05, m4lown >= 20, m4highn >= 20) %>% 
+  dplyr::select(tcemv) %>% 
+  table() %>% 
+  sort()
+
+#9639: melanoma	neoaffweak_THYMO_low 0.3 yes
+load(paste0(ext_folder1, "11out/cohort_all5"))
+load(paste0(ext_folder1,"11out/value_count_var_matching"))
+i = 9639
+temptcemvar = res$tcemv[i]
+tempcountvar = value_count_var_matching$countvar[value_count_var_matching$tcemvar == temptcemvar]
+cohort_f = cohort %>% 
+  dplyr::rename(countvar = tempcountvar, tcemvar = temptcemvar) %>% 
+  dplyr::filter(!is.na(tcemvar))
+summary(cohort_f$tcemvar)
+cohort_f %<>% 
+  dplyr::select(sampleid, TMB, countvar, tcemvar, OS_Event, OS_Months)
+if(res$tcemv_filter[i] == "yes") cohort_f %<>% dplyr::filter(countvar >= 10) #legalabb 10 neopeptid legyen
+cohort_f$tcemvargroup = cut(x = cohort_f$tcemvar, breaks = c(0,res$tcemv.cutpoint[i],1), include.lowest = T, labels = F, right = F)
+cohort_f %<>% na.omit()
+nrow(cohort_f)
+cor.test(cohort_f$TMB, cohort_f$tcemvar, method = "spearman")
+ggplot(cohort_f, aes(TMB, tcemvar)) + geom_point() + geom_smooth() + stat_cor(method = "spearman")
+#ggsave(file = paste0(ext_folder1,"09out/plots/", paste0(as.character(res[i,1:4]), collapse = "_"), "cor.jpg"), width = 20, height = 20, units = "cm", dpi = "retina")
+
+coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvar, data = cohort_f)
+has_warning(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvar, data = cohort_f))
+coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvar, data = cohort_f)
+has_warning(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvar, data = cohort_f))
+
+cox.zph(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvar, data = cohort_f))
+cox.zph(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvar, data = cohort_f))
+
+coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f)
+has_warning(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f))
+coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f)
+has_warning(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f))
+table(cohort_f$tcemvargroup)
+cox.zph(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f))
+has_warning(cox.zph(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f)))
+cox.zph(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f))
+has_warning(cox.zph(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f)))
+
+
+survp = ggsurvplot(fit = survfit(Surv(time = OS_Months, event = OS_Event) ~ tcemvargroup, data = cohort_f), pval = TRUE, legend.title = res$tcemv[i], surv.median.line = c("hv"), title = paste(c("Dataset:", res[i,1:4]), sep = " ", collapse = " "), font.main = 8, risk.table = T)
+# pdf(paste0(ext_folder1,"09out/plots/", paste0(as.character(res[i,1:4]), collapse = "_"), "survival_plot.pdf"))
+# print(survp, newpage = FALSE)
+# dev.off()
+
+
+ggforest(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvar, data = cohort_f), data = cohort_f)
+#ggsave(file = paste0(ext_folder1,"09out/plots/", paste0(as.character(res[i,1:4]), collapse = "_"), "ggforest.jpg"), width = 20, height = 20, units = "cm", dpi = "retina")
+ggforest(coxph(Surv(OS_Months, OS_Event) ~ TMB + tcemvargroup, data = cohort_f), data = cohort_f)
+#ggsave(file = paste0(ext_folder1,"09out/plots/",paste0(as.character(res[i,1:4]), collapse = "_"), "ggforest_cont.jpg"), width = 20, height = 20, units = "cm", dpi = "retina")
+
+rm(cohort_f, survp, i, tempcountvar, temptcemvar)
+
+
+```
+
+
+```{r}
+
+```
+
+
+
+Szign: neorpstr_EXPR_low - de csak ez...
+
+Fordítottja jön ki gyengén EXPR_loh_THYMO_low változókra.
+
+Kevéssé variábilis:
+neoaffstr_EXPR_loh_THYMO_low: 0 - 0.4
+neoaffweak_EXPR_loh_THYMO_low: 0 - 0.28
+neorpstr_EXPR_loh_THYMO_low: 0.02 - 0.21
+neorpweak_EXPR_loh_THYMO_low: 0.05 - 0.20
+
+```{r}
+load(paste0(ext_folder1, "11out/hugo/cohort"))
+summary(cohort$neorpweak_EXPR_loh_THYMO_low)
+
+load(paste0(ext_folder1,"09out/value_count_var_matching"))
+tcemvars = grep("_l|_h", colnames(cohort), value = T)
+
+res = expand.grid(tcemv = tcemvars, tcemv.cutpoint = seq(0.05,0.6,0.05), tcemv_filter = c("no", "yes"), stringsAsFactors = F)
+res %<>%
+  dplyr::mutate(m34n = NA, TMBcor_rho = NA, TMBcor_p = NA, m3coef = NA, m3p = NA, m3warning = NA,
+         m4lown = NA, m4highn = NA, m4coef = NA, m4p = NA, m4warning = NA)
+
+for(i in 1:nrow(res)) {
+  tryCatch({  
+    print(i)
+    temptcemvar = res$tcemv[i]
+    tempcountvar = value_count_var_matching$countvar[value_count_var_matching$tcemvar == temptcemvar]
+    cohort_f = cohort %>% 
+      dplyr::rename(countvar = tempcountvar, tcemvar = temptcemvar) %>% 
+      dplyr::filter(!is.na(tcemvar)) %>% 
+      dplyr::select(sampleid, mutcnt, countvar, tcemvar, OS_Event, OS_Months)
+    #filter neopep count connected to tcemvar
+    if(res$tcemv_filter[i] == "yes") cohort_f %<>% dplyr::filter(countvar >= 10) #legalabb 10 neopeptid legyen
+    #Create TCEM freq group
+    cohort_f$tcemvargroup = cut(x = cohort_f$tcemvar, breaks = c(0,res$tcemv.cutpoint[i],1), include.lowest = T, labels = F, right = F)
+    cohort_f %<>% na.omit()
+    res$m34n[i] = nrow(cohort_f)
+    if(nrow(subset(cohort_f, OS_Event == 1)) <= 3) next()
+    if(nrow(subset(cohort_f, tcemvargroup == 1)) <= 3 | nrow(subset(cohort_f, tcemvargroup == 2)) <= 3) next()
+    res$TMBcor_rho[i] = cor.test(cohort_f$mutcnt, cohort_f$tcemvar, method = "spearman")$estimate
+    res$TMBcor_p[i] = cor.test(cohort_f$mutcnt, cohort_f$tcemvar, method = "spearman")$p.value
+    if(nrow(cohort_f) < 10) next()
+    m3 = coxph(Surv(OS_Months, OS_Event) ~ mutcnt + tcemvar, data = cohort_f)
+    res$m3coef[i] = as.matrix(coef(summary(m3)))["tcemvar","coef"]
+    res$m3p[i] = as.matrix(coef(summary(m3)))["tcemvar","Pr(>|z|)"]
+    res$m3warning[i] = has_warning(coxph(Surv(OS_Months, OS_Event) ~ mutcnt + tcemvar, data = cohort_f))
+    # ftestm3 = cox.zph(m3)
+    # res_ftest$m3p[i] = ftestm3$table["tcemvar","p"]
+    # res_ftest$m3globalp[i] = ftestm3$table["GLOBAL","p"]
+    # res_ftest$m3warning[i] = has_warning(cox.zph(coxph(Surv(OS_Months, OS_Event) ~  mutcnt + tcemvar, data = cohort_f)))
+    res$m4lown[i] = table(cohort_f$tcemvargroup)["1"]
+    res$m4highn[i] = table(cohort_f$tcemvargroup)["2"]
+    m4 = coxph(Surv(OS_Months, OS_Event) ~ mutcnt + tcemvargroup, data = cohort_f)
+    res$m4coef[i] = as.matrix(coef(summary(m4)))["tcemvargroup","coef"]
+    res$m4p[i] = as.matrix(coef(summary(m4)))["tcemvargroup","Pr(>|z|)"]
+    res$m4warning[i] = has_warning(coxph(Surv(OS_Months, OS_Event) ~ mutcnt + tcemvargroup, data = cohort_f))
+    # ftestm4 = cox.zph(m4)
+    # res_ftest$m4p[i] = ftestm4$table["tcemvargroup","p"]
+    # res_ftest$m4globalp[i] = ftestm4$table["GLOBAL","p"]
+    # res_ftest$m4warning[i] = has_warning(cox.zph(coxph(Surv(OS_Months, OS_Event) ~ mutcnt + tcemvargroup, data = cohort_f)))
+  }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+}
+
+rm(cohort_f, m3, m4, i, tempcountvar, temptcemvar)
+
+save(res, file = paste0(ext_folder1,"11out/hugo/survival"))
+View(res[res$tcemv %in% c("neoaffstr_EXPR_loh_THYMO_low","neoaffweak_EXPR_loh_THYMO_low","neorpstr_EXPR_loh_THYMO_low", "neorpweak_EXPR_loh_THYMO_low"),])
+
+#1172
+i = 1372
+temptcemvar = res$tcemv[i]
+tempcountvar = value_count_var_matching$countvar[value_count_var_matching$tcemvar == temptcemvar]
+cohort_f = cohort %>% 
+  dplyr::rename(countvar = tempcountvar, tcemvar = temptcemvar) %>% 
+  dplyr::filter(!is.na(tcemvar))
+cohort_f %<>% 
+  dplyr::select(sampleid, mutcnt, countvar, tcemvar, OS_Event, OS_Months)
+if(res$tcemv_filter[i] == "yes") cohort_f %<>% dplyr::filter(countvar >= 10) #legalabb 10 neopeptid legyen
+cohort_f$tcemvargroup = cut(x = cohort_f$tcemvar, breaks = c(0,res$tcemv.cutpoint[i],1), include.lowest = T, labels = F, right = F)
+cohort_f %<>% na.omit()
+nrow(cohort_f)
+cor.test(cohort_f$mutcnt, cohort_f$tcemvar, method = "spearman")
+ggplot(cohort_f, aes(mutcnt, tcemvar)) + geom_point() + geom_smooth() + stat_cor(method = "spearman")
+coxph(Surv(OS_Months, OS_Event) ~ mutcnt + tcemvar, data = cohort_f)
+has_warning(coxph(Surv(OS_Months, OS_Event) ~ mutcnt + tcemvar, data = cohort_f))
+cox.zph(coxph(Surv(OS_Months, OS_Event) ~ mutcnt + tcemvar, data = cohort_f))
+coxph(Surv(OS_Months, OS_Event) ~ mutcnt + tcemvargroup, data = cohort_f)
+table(cohort_f$tcemvargroup)
+has_warning(coxph(Surv(OS_Months, OS_Event) ~ mutcnt + tcemvargroup, data = cohort_f))
+cox.zph(coxph(Surv(OS_Months, OS_Event) ~ mutcnt + tcemvargroup, data = cohort_f))
+has_warning(cox.zph(coxph(Surv(OS_Months, OS_Event) ~ mutcnt + tcemvargroup, data = cohort_f)))
+
+ggsurvplot(fit = survfit(Surv(time = OS_Months, event = OS_Event) ~ tcemvargroup, data = cohort_f), pval = TRUE, legend.title = res$tcemv[i], surv.median.line = c("hv"), title = paste(c("Dataset:", res[i,1:4]), sep = " ", collapse = " "), font.main = 8, risk.table = T)
+
+ggforest(coxph(Surv(OS_Months, OS_Event) ~ mutcnt + tcemvar, data = cohort_f), data = cohort_f)
+ggforest(coxph(Surv(OS_Months, OS_Event) ~ mutcnt + tcemvargroup, data = cohort_f), data = cohort_f)
+
+rm(cohort_f, i, tempcountvar, temptcemvar)
+
+```
+
+
+

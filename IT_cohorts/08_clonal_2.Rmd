@@ -1,0 +1,345 @@
+---
+title: "Determine binding nonamers and their original nonamers"
+author: "Balazs Koncz"
+date: '2020 12 03 '
+output: html_document
+---
+
+#Setup
+
+```{r}
+setwd("d:/CloudStation/mygit/fitness-modell-bk/")
+packs = c("Rfast","fastmatch","purrr","furrr","pbapply","parallel","Hmisc","ggplot2","ggpubr")
+invisible(lapply(packs, require, character.only = TRUE))
+rm(packs)
+ext_folder1 = "d:/CloudStation/fitness-model-ext/"
+# fillnafun = function(v,l) {
+#   outvec = c(v,rep(NA,l-length(v)))
+#   names(outvec) = NULL
+#   outvec
+# }
+#nonamers$mutpos = apply(nonamers, 1, function(z) which(Reduce("!=", strsplit(c(z[1], z[2]), split = ""))))
+```
+
+#Collect peptides
+
+```{r}
+annfiles = list.files("D:/CloudStation/fitness-model/create_neoantigens/annotated/", full.names = T)
+
+dtann1 = read.table("D:/CloudStation/fitness-model/create_neoantigens/annotated/AL4602.txt", header = F, stringsAsFactors = F, col.names = c("Uploaded_variation","Location","Allele","Gene","Feature","Feature_type","Consequence","cDNA_position","CDS_position","Protein_position","Amino_acids","Codons","Existing_variation","Extra"))
+dtann = matrix(NA, nrow = 0, ncol = ncol(dtann1), dimnames = list(NULL,colnames(dtann1)))
+rm(dtann1)
+
+for(i in annfiles) {
+  tempannfile = read.table(i, header = F, stringsAsFactors = F, col.names = colnames(dtann))
+  dtann = rbind(dtann, tempannfile)
+}
+rm(tempannfile, annfiles, i)
+
+dtann = dtann[dtann$Consequence == "missense_variant",]
+dtann$sampleid = sapply(dtann$Uploaded_variation, function(x) strsplit(x, "_")[[1]][5])
+dtann = dtann[,c("sampleid", "Uploaded_variation","Feature","Protein_position","Amino_acids","Extra")]
+#class(dtann$Protein_position) = "numeric"
+
+dtann$origaa = sapply(dtann$Amino_acids, function(x) substr(x,1,1))
+dtann$mutaa = sapply(dtann$Amino_acids, function(x) substr(x,3,3))
+dtann$mutation = apply(dtann, 1, function(x) paste0(x[7], x[4], x[8]))
+dtann$origseq = pbsapply(dtann$Extra, function(x) gsub("WildtypeProtein=", "", grep("WildtypeProtein=", strsplit(x, ";")[[1]], value = T)))
+
+dtann$validmut = pbapply(dtann, 1, function(x) substr(x[10],as.numeric(x[4]),as.numeric(x[4])) == x[7])
+dtann = subset(dtann, validmut == TRUE) #all of them
+dtann$protlen = nchar(dtann$origseq)
+dtann$mutseq = pbapply(dtann, 1, function(x) paste0(substr(x[10],1,as.numeric(x[4])-1),x[8],substr(x[10],as.numeric(x[4])+1,x[12])))
+
+#determine -8 +8 region
+aaregion = t(pbapply(dtann,1,function(x) {
+  temppos = as.numeric(x[4])
+  templen = as.numeric(x[12])
+  temporigseq = x[10]
+  tempmutseq = x[13]
+  if(temppos<9) {
+    out = c(substr(temporigseq,1,temppos+8),substr(tempmutseq,1,temppos+8))
+  } else if(temppos>templen-8) {
+    out = c(substr(temporigseq,temppos-8,templen),substr(tempmutseq,temppos-8,templen))
+  } else {
+    out = c(substr(temporigseq,temppos-8,temppos+8),substr(tempmutseq,temppos-8,temppos+8))
+  }
+  out
+}))
+colnames(aaregion) = c("origreg", "mutreg")
+dtann = cbind(dtann, aaregion)
+rm(aaregion)
+
+dtann = unique(dtann[,c("sampleid", "Uploaded_variation", "Feature", "mutation", "origreg", "mutreg")])
+dtann = dtann[!grepl('X|U', dtann$origreg) & !grepl('X|U', dtann$mutreg),]
+dtann = dtann[nchar(dtann$origreg)>=9,]
+save(dtann, file = paste0(ext_folder1, "08out/dtann_01"))
+```
+
+#Filter (duplicated mutations)
+
+```{r}
+load(paste0(ext_folder1, "08out/dtann_01"))
+
+dtann$dup = duplicated(dtann[,c("sampleid", "Uploaded_variation", "origreg", "mutreg")])
+dtann = dtann[dtann$dup == FALSE,]
+dtann$dup = NULL
+dtann$origreglen = nchar(dtann$origreg)
+dtann$Uploaded_variation[duplicated(dtann$Uploaded_variation)]
+
+dups = unique(dtann$Uploaded_variation[duplicated(dtann$Uploaded_variation)])
+dtann = dtann[!dtann$Uploaded_variation %in% dups,] #kizartam ahol nem egyertelmu az aminosavszekvencia
+rm(dups)
+
+save(dtann, file = paste0(ext_folder1, "08out/dtann_02"))
+```
+
+#Determine TCEM mutated binding peptides
+
+```{r}
+load(paste0(ext_folder1, "08out/dtann_02"))
+ids = unique(dtann$sampleid)
+
+i=0
+pblapply(ids, function(x) {
+  i = i+1
+  .GlobalEnv$i = i
+  #NEO
+  neoeps_list = lapply(dtann$mutreg[dtann$sampleid == x], function(a) substring(a, 1:(nchar(a)-8), 9:nchar(a)))
+  origeps_list = lapply(dtann$origreg[dtann$sampleid == x], function(a) substring(a, 1:(nchar(a)-8), 9:nchar(a)))
+  muts = rep(dtann$Uploaded_variation[dtann$sampleid == x],lengths(neoeps_list))
+  nonamers = cbind(muts, origeps = unlist(origeps_list), neoeps = unlist(neoeps_list))
+  nonamers = cbind(nonamers, origtcem = substr(nonamers[,"origeps"],4,8), neotcem = substr(nonamers[,"neoeps"],4,8))
+  nonamers = as.data.frame(nonamers)
+  nonamers$mutpos = apply(nonamers, 1, function(z) which(Reduce("!=", strsplit(c(z[2], z[3]), split = ""))))
+  nonamers$tcemmut = nonamers$mutpos > 3 & nonamers$mutpos < 9
+  nonamers = nonamers[nonamers$tcemmut == TRUE,]
+  load(paste0(ext_folder1, "06out/binding_matrices/binding_matrix_", x))
+  nonamers$origaffmin = colMins(binding_matrix$aff[,nonamers$origeps], value = T)
+  nonamers$origrpmin = colMins(binding_matrix$rp[,nonamers$origeps], value = T)
+  nonamers$neoaffmin = colMins(binding_matrix$aff[,nonamers$neoeps], value = T)
+  nonamers$neorpmin = colMins(binding_matrix$rp[,nonamers$neoeps], value = T)
+  nonamers$origaffweak = nonamers$origaffmin<500
+  nonamers$origaffstr = nonamers$origaffmin<50
+  nonamers$origrpweak = nonamers$origrpmin<2
+  nonamers$origrpstr = nonamers$origrpmin<.5
+  nonamers$neoaffweak = nonamers$neoaffmin<500
+  nonamers$neoaffstr = nonamers$neoaffmin<50
+  nonamers$neorpweak = nonamers$neorpmin<2
+  nonamers$neorpstr = nonamers$neorpmin<.5
+  save(nonamers, file = paste0(ext_folder1,"08out/tcem_mutated_nonamers/", x))
+})
+```
+
+#Original and neo TCEM frequencies, expression, Thymoscre, IPscore
+
+```{r}
+ids = list.files(paste0(ext_folder1, "08out/tcem_mutated_nonamers/")) #199
+load(paste0(ext_folder1, "objects/pentamerfreq_tcem"))
+load(paste0(ext_folder1, "objects/exprmeds"))
+load(paste0(ext_folder1, "objects/thymomeds"))
+load(paste0(ext_folder1, "objects/immunomeds"))
+
+
+pblapply(ids, function(x) {
+  load(paste0(ext_folder1, "08out/tcem_mutated_nonamers/", x))
+  nonamers$origfreq = sapply(nonamers$origtcem, function(y) pentamerfreq_tcem[fmatch(y,names(pentamerfreq_tcem))])
+  nonamers$neofreq = sapply(nonamers$neotcem, function(y) pentamerfreq_tcem[fmatch(y,names(pentamerfreq_tcem))])
+  nonamers$origexpr = sapply(nonamers$origtcem, function(y) exprmeds[fmatch(y,names(exprmeds))])
+  nonamers$neoexpr = sapply(nonamers$neotcem, function(y) exprmeds[fmatch(y,names(exprmeds))])
+  nonamers$origthymo = sapply(nonamers$origtcem, function(y) thymomeds[fmatch(y,names(thymomeds))])
+  nonamers$neothymo = sapply(nonamers$neotcem, function(y) thymomeds[fmatch(y,names(thymomeds))])
+  nonamers$origimmuno = sapply(nonamers$origtcem, function(y) immunomeds[fmatch(y,names(immunomeds))])
+  nonamers$neoimmuno = sapply(nonamers$neotcem, function(y) immunomeds[fmatch(y,names(immunomeds))])
+  save(nonamers, file = paste0(ext_folder1,"08out/tcem_mutated_nonamers/", x))
+})
+
+load(paste0(ext_folder1,"08out/tcem_mutated_nonamers/CR6126"))
+
+```
+
+#Aggragate clonality data
+
+```{r}
+clonality = matrix(NA, ncol = 11, nrow = 0, dimnames = list(NULL, c("CHROM","POS","ID","REF","ALT","QUAL","FILTER","INFO","FORMAT","NORMAL","TUMOR")))
+for(i in list.files(paste0(ext_folder1, "objects/raw_vcf/"), full.names = T)) {
+  temprawdata = read.table(file = i, sep = "\t", col.names = c("CHROM","POS","ID","REF","ALT","QUAL","FILTER","INFO","FORMAT","NORMAL","TUMOR"))
+  clonality = rbind(clonality, temprawdata)
+}
+rm(i, temprawdata)
+
+clonality$sampleid = sapply(clonality$ID, function(x) strsplit(x, "_")[[1]][5])
+clonality$counter = as.numeric(sapply(clonality$TUMOR, function(x) strsplit(x,":")[[1]][2]))
+clonality$denominator = as.numeric(sapply(clonality$TUMOR, function(x) strsplit(x,":")[[1]][1]))
+clonality$ratio = clonality$counter/clonality$denominator
+save(clonality, file = paste0(ext_folder1, "08out/clonality"))
+```
+
+#Calculate TCEM related variables to clonality data
+
+```{r}
+ids = list.files(paste0(ext_folder1, "08out/tcem_mutated_nonamers/")) #198
+load(paste0(ext_folder1, "08out/clonality"))
+
+tcemprops = pblapply(ids, function(x) {
+  load(paste0(ext_folder1, "08out/tcem_mutated_nonamers/", x))
+  tempclon = clonality[clonality$sampleid == x,]
+  a = t(sapply(tempclon$ID, function(y) {
+    tempnonamers = nonamers[nonamers$muts == y,]
+    neoaffweak_freq = tempnonamers %>% dplyr::filter(neoaffweak == TRUE) %>% dplyr::pull(neofreq) %>% median()
+    neoaffstr_freq = tempnonamers %>% dplyr::filter(neoaffstr == TRUE) %>% dplyr::pull(neofreq) %>% median()
+    neorpweak_freq = tempnonamers %>% dplyr::filter(neorpweak == TRUE) %>% dplyr::pull(neofreq) %>% median()
+    neorpstr_freq = tempnonamers %>% dplyr::filter(neorpstr == TRUE) %>% dplyr::pull(neofreq) %>% median()
+    c(neoaffweak_freq, neoaffstr_freq, neorpweak_freq, neorpstr_freq)
+  }))
+  colnames(a) = c("neoaffweak_freq", "neoaffstr_freq", "neorpweak_freq", "neorpstr_freq")
+  a
+})
+
+tcemprops = do.call(rbind, tcemprops)
+save(tcemprops, file = paste0(ext_folder1, "08out/tcemprops"))
+
+tcemprops = as.data.frame(tcemprops)
+res = cbind(clonality, tcemprops[match(clonality$ID, rownames(tcemprops)),])
+
+save(res, file = paste0(ext_folder1, "08out/clonality_and_tcemprops"))
+```
+
+#Statistics
+##Correlation
+
+```{r}
+load(paste0(ext_folder1, "08out/clonality_and_tcemprops"))
+ids = unique(res$sampleid)
+
+vals = grep("neo", colnames(res), value = T)
+cors = t(sapply(ids, function(x) {
+  tempres = res[res$sampleid == x,c("ratio", vals)]
+  tempcors = t(sapply(vals, function(y) {
+    if(length(tempres[,y][!is.na(tempres[,y])])<4) {
+      est = NA
+      pvalue = NA
+    } else {
+      est = rcorr(tempres$ratio, tempres[,y], type = "spearman")$r[1,2]
+      pvalue = rcorr(tempres$ratio, tempres[,y], type = "spearman")$P[1,2]
+    }
+    c(est, pvalue)
+  }))
+  colnames(tempcors) = c("rho", "pvalue")
+  tempcors
+}))
+colnames(cors) = c(paste0(vals, "_rho"),paste0(vals, "_pvalue"))
+
+nbofpep = t(sapply(ids, function(x) {
+  tempres = res[res$sampleid == x,c("ratio", vals)]
+  tempnbofpep = sapply(vals, function(y) {
+    length(tempres[,y][!is.na(tempres[,y])])
+  })
+}))
+colnames(nbofpep) = paste0(vals, "_n")
+
+cors = cbind(cors, nbofpep)
+cors = cors[,sort(colnames(cors))]
+
+save(cors, file = paste0(ext_folder1, "08out/cors_patients"))
+```
+
+##JAVÍTANI Wilcoxon's rank sum test
+
+```{r}
+load(paste0(ext_folder1, "08out/clonality_and_tcemprops"))
+ids = unique(res$sampleid)
+
+vals = colnames(res)[grepl("str_|weak_", colnames(res)) & !grepl("_nep", colnames(res)) & !grepl("_dif", colnames(res))]
+wts = t(pbsapply(ids, function(x) {
+  tempres = res[res$sampleid == x,c("ratio", vals)]
+  tempwts = t(sapply(vals, function(y) {
+    tempres$group = cut(x = tempres[,y], breaks = c(0,4,Inf), include.lowest = T, right = F, labels = F)
+    if(nrow(subset(tempres, group == 1)) < 5 | nrow(subset(tempres, group == 2)) < 5) {
+      medlow = NA
+      medhigh = NA
+      pvalue = NA
+    } else {
+      medlow = median(tempres$ratio[tempres$group == 1], na.rm = T)
+      medhigh = median(tempres$ratio[tempres$group == 2], na.rm = T)
+      pvalue = wilcox.test(tempres$ratio[tempres$group == 1],tempres$ratio[tempres$group == 2])$p.value
+    }
+    c(medlow, medhigh, pvalue)
+  }))
+  colnames(tempwts) = c("medlow", "medhigh", "pvalue")
+  tempwts
+}))
+colnames(wts) = c(paste0(vals, "_medlow"),paste0(vals, "_medhigh"),paste0(vals, "_pvalue"))
+
+valsnb = colnames(res)[grepl("_nep", colnames(res)) & !grepl("_dif", colnames(res))]
+nbofpep = t(pbsapply(ids, function(x) {
+  tempres = res[res$sampleid == x,c("ratio", valsnb)]
+  tempnbofpep = t(sapply(valsnb, function(y) {
+    sum(tempres[,y])
+  }))
+}))
+colnames(nbofpep) = valsnb
+
+wts = cbind(wts, nbofpep)
+wts = wts[,sort(colnames(wts))]
+
+save(wts, file = paste0(ext_folder1, "08out/wts_patients"))
+```
+
+##JAVÍTANI Fisher test
+
+```{r}
+load(paste0(ext_folder1, "08out/clonality_and_tcemprops"))
+res$ratiogroup = cut(x = res$ratio, breaks = c(0,0.9,1), labels = c("low","high"), include.lowest = T, right = T)
+ids = unique(res$sampleid)
+
+vals = colnames(res)[grepl("str_|weak_", colnames(res)) & !grepl("_nep", colnames(res)) & !grepl("_dif", colnames(res))]
+fts = t(pbsapply(ids, function(x) {
+  tempres = res[res$sampleid == x,c("ratiogroup", vals)]
+  tempfts = t(sapply(vals, function(y) {
+    tempres$group = cut(x = tempres[,y], breaks = c(0,4,Inf), include.lowest = T, right = F, labels = F)
+    if(nrow(subset(tempres, group == 1)) < 5 | nrow(subset(tempres, group == 2)) < 5 | 
+       nrow(subset(tempres, ratiogroup == "low")) < 5 | nrow(subset(tempres, ratiogroup == "high")) < 5) {
+      fisheror = NA
+      fisherp = NA
+    } else {
+      fisheror = fisher.test(tempres$ratiogroup, tempres$group)$estimate
+      fisherp = fisher.test(tempres$ratiogroup, tempres$group)$p.value
+    }
+    c(fisheror, fisherp)
+  }))
+  colnames(tempfts) = c("fisheror", "fisherp")
+  tempfts
+}))
+colnames(fts) = c(paste0(vals, "_fisheror"),paste0(vals, "_fisherp"))
+save(fts, file = paste0(ext_folder1, "08out/fts_patients"))
+
+load(paste0(ext_folder1, "08out/wts_patients"))
+wts_fts = cbind(wts, fts)
+wts_fts = wts_fts[,sort(colnames(wts_fts))]
+save(wts_fts, file = paste0(ext_folder1, "08out/wts_fts_patients"))
+
+##########################################################
+
+load(paste0(ext_folder1, "08out/wts_fts_patients"))
+load(paste0(ext_folder1, "08out/clonality_and_tcemprops"))
+
+res$ratiogroup = cut(x = res$ratio, breaks = c(0,0.7,1), labels = c("low","high"), include.lowest = T, right = T)
+ids = unique(res$sampleid)
+vals = colnames(res)[grepl("str_|weak_", colnames(res)) & !grepl("_nep", colnames(res)) & !grepl("_dif", colnames(res))]
+
+x = "CR04885"
+y = vals[1]
+tempres = res[res$sampleid == x,c("ratio","ratiogroup", vals)]
+tempres$group = cut(x = tempres[,y], breaks = c(0,4,Inf), include.lowest = T, right = F, labels = F)
+median(tempres$ratio[tempres$group == 1], na.rm = T) #alacsony TCEM gyakoriságú peptidekben a klonalitási arány, ezt várjuk nagyobbnak
+median(tempres$ratio[tempres$group == 2], na.rm = T)
+wilcox.test(tempres$ratio[tempres$group == 1],tempres$ratio[tempres$group == 2])
+fisher.test(tempres$ratiogroup, tempres$group) #OR<1 alacsony TCEM gyakoriságúaknál nagyobb klonalitási arány
+table(tempres$ratiogroup, tempres$group)
+
+
+
+
+```
+

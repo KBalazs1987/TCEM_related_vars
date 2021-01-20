@@ -1,0 +1,77 @@
+---
+title: "TP score and HLA"
+author: "Balazs Koncz"
+date: '2020 12 09 '
+output: html_document
+---
+Azt kaptuk, hogy akiknel nagy az olyan neopeptidek aranya, melyek alacsony TP score-ral rendelkeznek es az expresszio alacsony vagy magas, rosszabbul élnek túl immunterápiás kohortokban. Feltehetően a pozitívan szelektálódott T sejtek hiánya miatt.
+Van-v alamilyen összefüggés a HLA allélok és a TP score között?
+
+```{r}
+setwd("d:/CloudStation/mygit/fitness-modell-bk/")
+ext_folder1 = "d:/CloudStation/fitness-model-ext/"
+packs <- c("magrittr", "fastmatch", "ggplot2", "tidyr")
+invisible(lapply(packs, require, character.only = TRUE))
+rm(packs)
+```
+
+```{r}
+ids = list.files(paste0(ext_folder1, "08out/tcem_mutated_nonamers/"))
+cutp_expr1 = 0.203075
+cutp_expr2 = 1.095007
+cutp_th = 0.914470
+
+
+genotype = pblapply(ids, function(x) {
+  load(paste0(ext_folder1, "06out/binding_matrices/binding_matrix_", x))
+  rownames(binding_matrix$aff)
+})
+genotype = do.call(rbind, genotype)
+
+
+lorhelt_hla = pblapply(ids, function(x) {
+  load(paste0(ext_folder1, "06out/binding_matrices/binding_matrix_", x))
+  load(paste0(ext_folder1, "08out/tcem_mutated_nonamers/", x))
+  gt = rownames(binding_matrix$aff)
+  temprat = t(sapply(gt, function(g) {
+    affstr_df = binding_matrix$aff[g,nonamers$neoeps]
+    affstr_df = affstr_df[affstr_df<50]
+    affstr_df = nonamers[nonamers$neoeps %fin% names(affstr_df),]
+    affstr_df = affstr_df %>% dplyr::filter(!is.na(neoexpr),!is.na(neothymo))
+    affstr_net = nrow(affstr_df)
+    affstr_lorhelt = sum((affstr_df$neoexpr<cutp_expr1|affstr_df$neoexpr>=cutp_expr2) & affstr_df$neothymo<cutp_th) / affstr_net
+    affweak_df = binding_matrix$aff[g,nonamers$neoeps]
+    affweak_df = affweak_df[affweak_df<500]
+    affweak_df = nonamers[nonamers$neoeps %fin% names(affweak_df),]
+    affweak_df = affweak_df %>% dplyr::filter(!is.na(neoexpr),!is.na(neothymo))
+    affweak_net = nrow(affweak_df)
+    affweak_lorhelt = sum((affweak_df$neoexpr<cutp_expr1|affweak_df$neoexpr>=cutp_expr2) & affweak_df$neothymo<cutp_th) / affweak_net
+    rpstr_df = binding_matrix$rp[g,nonamers$neoeps]
+    rpstr_df = rpstr_df[rpstr_df<2]
+    rpstr_df = nonamers[nonamers$neoeps %fin% names(rpstr_df),]
+    rpstr_df = rpstr_df %>% dplyr::filter(!is.na(neoexpr),!is.na(neothymo))
+    rpstr_net = nrow(rpstr_df)
+    rpstr_lorhelt = sum((rpstr_df$neoexpr<cutp_expr1|rpstr_df$neoexpr>=cutp_expr2) & rpstr_df$neothymo<cutp_th) / rpstr_net
+    rpweak_df = binding_matrix$rp[g,nonamers$neoeps]
+    rpweak_df = rpweak_df[rpweak_df<.5]
+    rpweak_df = nonamers[nonamers$neoeps %fin% names(rpweak_df),]
+    rpweak_df = rpweak_df %>% dplyr::filter(!is.na(neoexpr),!is.na(neothymo))
+    rpweak_net = nrow(rpweak_df)
+    rpweak_lorhelt = sum((rpweak_df$neoexpr<cutp_expr1|rpweak_df$neoexpr>=cutp_expr2) & rpweak_df$neothymo<cutp_th) / rpweak_net
+    c(affstr_net, affstr_lorhelt, affweak_net, affweak_lorhelt, rpstr_net, rpstr_lorhelt, rpweak_net, rpweak_lorhelt)
+  }))
+  colnames(temprat) = c("affstr_net", "affstr_lorhelt", "affweak_net", "affweak_lorhelt", "rpstr_net", "rpstr_lorhelt", "rpweak_net", "rpweak_lorhelt")
+  rownames(temprat) = sapply(rownames(temprat), function(z) gsub(":", "", gsub("HLA-", "", z)))
+  temprat
+})
+lorhelt_hla = do.call(rbind, lorhelt_hla)
+lorhelt_hla = as.data.frame(lorhelt_hla)
+lorhelt_hla = cbind.data.frame(allele = substr(rownames(lorhelt_hla),1,5),lorhelt_hla)
+lorhelt_hla$allele = factor(lorhelt_hla$allele, levels = sort(unique(lorhelt_hla$allele)))
+table(lorhelt_hla$allele)
+freqalleles = table(lorhelt_hla$allele)>10
+lorhelt_hla = dplyr::add_count(lorhelt_hla, allele)
+
+ggplot(lorhelt_hla[lorhelt_hla$n>=20,], aes(allele, affstr_lorhelt)) + geom_boxplot() + theme(axis.text.x = element_text(angle = 90))
+
+```
